@@ -19,3 +19,10 @@ Harga bisa berada di Tinggi Atas Bawah Rendah berdasarkan garis waktu
 1. Mahal
 2. Umum
 3. Murah
+
+# Kode di atas bisa digunakan untuk apa?
+1. Garis Waktu digunakan untuk mengidentifikasi pergerakan harga GT yang bergelombang naik turun
+2. Penghalang harga adalah batasan harga yang tidak dilanjutkan berdasarkan garis waktu (gw)
+3. Reaksi Berantai adalah GT yang melanjutkan pergerakan satu arah GT
+4. Tegangan adalah GT yang membuat harga di garis waktu tertentu yang tidak membentuk rantai harga yang semakin naik atau semakin turun
+5. Harga MaUmMu adalah harga di atas yang sekiranya sudah mahal, umum dan murah
