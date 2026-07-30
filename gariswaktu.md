@@ -26,3 +26,7 @@ Harga bisa berada di Tinggi Atas Bawah Rendah berdasarkan garis waktu
 3. Reaksi Berantai adalah GT yang melanjutkan pergerakan satu arah GT
 4. Tegangan adalah GT yang membuat harga di garis waktu tertentu yang tidak membentuk rantai harga yang semakin naik atau semakin turun
 5. Harga MaUmMu adalah harga di atas yang sekiranya sudah mahal, umum dan murah
+
+# Ada beberapa jenis halangan
+1. Halangan karena tali atas dan tali bawah
+2. Halangan karena neto yang lebih kecil dari neto kanan kiri
