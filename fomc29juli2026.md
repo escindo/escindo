@@ -110,13 +110,15 @@ print(hitung_lot_aman(1100, 1.0, 50, 1))   # Hasil: 0.22 lot
 4. Ke depan: setiap kali pindah akun → anggap seperti trader baru (reset kebiasaan volume).
 
 # Status Jurnal: Selesai & Ditutup
-Tindakan Lanjutan:  Buat template risk calculator di Excel / Google Sheet  
+Tindakan Lanjutan:  Buat template risk calculator di Excel / Google Sheet  / https://cindo.pages.dev/jurnaltrading
 Pasang reminder di platform: “CEK AKUN SEBELUM KLIK”  
 Latihan 30 hari hanya pakai 0.01–0.10 lot di akun Standard sampai kebiasaan terbentuk
 
 Modal tersisa setelah kejadian: ≈ $0 di Standard (habis) + tim deposit lagi di akun Micro 2jt dapat 110 dolar dengan bonus kredit 55.73 dolar
 Target recovery: Mulai lagi dari akun Micro dengan disiplin lot ketat.
 
+# Kejadian Yang Terulang
+Kejadian sebelumnya sudah pernah terjadi, yaitu ketika membagi 2 akun, setelah akun yang satunya SO (Stop Out) maka akun yang satunya juga SO.
 
 
 
