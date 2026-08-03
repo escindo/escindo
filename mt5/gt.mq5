@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//|                                               GrafikTabranij.mq5 |
-//|                                     MOCHAMAD TABRANI KEBUN SALDO |
+//|                                              Grafik Tabranij.mq5 |
+//|                                                  KEBUN SALDO MT5 |
 //|                                          https://cindo.pages.dev |
 //+------------------------------------------------------------------+
 #property copyright   "MOCHAMAD TABRANI (c) 2026"
@@ -32,20 +32,20 @@ enum ENUM_THEME
 //+------------------------------------------------------------------+
 
 //--- System Information
-input string          _s0                  = "================= EA GT PESALDO ================="; 
+input string          _s0                  = "=========== EA GT PESALDO ==========="; 
 sinput string         Info_System          = "EA GT Pesaldo "; 
 sinput string         Info_Version         = "v0.01 [Grafik Tabranij]"; 
 sinput string         Info_Author          = "MOCHAMAD TABRANI";                  
 sinput string         Info_Support         = "cindo.pages.dev";   
 
 //--- Dashboard Layout
-input string          _s1                  = "================= DASHBOARD GEOMETRY =================";
+input string          _s1                  = "=========== DASHBOARD GEOMETRY ===========";
 input int             X_Offset             = 20;       // Horizontal Offset (Pixels)
 input int             Y_Offset             = 40;       // Vertical Offset (Pixels)
 input int             Panel_Width          = 600;      // Total Dashboard Width
 
 //--- Trading Engine Settings
-input string          _s2                  = "================= GRAFIK TABRANIJ ALGO STRATEGY =================";
+input string          _s2                  = "=========== GRAFIK TABRANIJ ALGO STRATEGY ===========";
 input ENUM_TIMEFRAMES InpGTTimeframe       = PERIOD_H1;     // GT Besar Timeframe/durasi (Signal Basis)
 input double          InpLot               = 0.01;          // Base Lot Volume
 input double          InpMultiplier        = 2.0;           // Martingale Volume Multiplier
@@ -55,14 +55,14 @@ input int             InpSL                = 150;           // Stop Loss Distanc
 input int             InpMagic             = 888999;        // Algorithm Serial ID
 
 //--- Theme & Color Settings
-input string          _s5                  = "================= UI THEME & PALETTE =================";
+input string          _s5                  = "=========== UI THEME & PALETTE ===========";
 input ENUM_THEME      InpTheme             = THEME_ONYX_GOLD;   // Active Visual Theme
 input color           Label_Color          = clrGold;           // Primary Label Color
 input color           Value_Color          = clrWhite;          // Numerical Value Color
 input color           Live_Color           = C'255,225,100';    // Real-time Accent Color
 
 //--- Chart Visualization
-input string          _s6                  = "================= CHART VISUALIZATION =================";
+input string          _s6                  = "=========== CHART VISUALIZATION ===========";
 input bool            InpShowGTChart       = true;              // Plot GT Mathematical Levels
 input int             InpLevelWidth        = 1;                 // Level Line Thickness
 input ENUM_LINE_STYLE InpLevelStyle        = STYLE_SOLID;       // Level Line Pattern
