@@ -6,9 +6,9 @@
 #property copyright   "MOCHAMAD TABRANI (c) 2026"
 #property link        "https://cindo.pages.dev"
 #property version     "1.00"
-#property description "EA GT Trading - Komando Profit & Keamanan"
+#property description "EA GT Pesaldo - Komando Profit & Keamanan"
 #property description "========================================================"
-#property description "EA Trading ini beroperasi berdasarkan Sinyal GT Besar."
+#property description "EA Perdagangan ini beroperasi berdasarkan Sinyal GT Besar."
 #property description "Didesain spesifik untuk volatilitas tinggi (BTCUSD, XAUUSD, GOLDmicro)."
 
 //+------------------------------------------------------------------+
@@ -32,7 +32,7 @@ enum ENUM_THEME
 //+------------------------------------------------------------------+
 
 //--- System Information
-input string          _s0                  = "================= EA GT TRADING ================="; 
+input string          _s0                  = "================= EA GT PESALDO ================="; 
 sinput string         Info_System          = "EA GT Pesaldo "; 
 sinput string         Info_Version         = "v0.01 [Grafik Tabranij]"; 
 sinput string         Info_Author          = "MOCHAMAD TABRANI";                  
