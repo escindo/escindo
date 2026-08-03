@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
 //|                                               GrafikTabranij.mq5 |
-//|                                 Copyright 2026, MOCHAMAD TABRANI |
+//|                                     MOCHAMAD TABRANI KEBUN SALDO |
 //|                                          https://cindo.pages.dev |
 //+------------------------------------------------------------------+
-#property copyright   "MOCHAMAD TABRANI (c) 2026, Ringin Bambu"
+#property copyright   "MOCHAMAD TABRANI (c) 2026"
 #property link        "https://cindo.pages.dev"
 #property version     "1.00"
 #property description "EA GT Trading - Komando Profit & Keamanan"
@@ -33,7 +33,7 @@ enum ENUM_THEME
 
 //--- System Information
 input string          _s0                  = "================= EA GT TRADING ================="; 
-sinput string         Info_System          = "EA GT Trading "; 
+sinput string         Info_System          = "EA GT Pesaldo "; 
 sinput string         Info_Version         = "v0.01 [Grafik Tabranij]"; 
 sinput string         Info_Author          = "MOCHAMAD TABRANI";                  
 sinput string         Info_Support         = "cindo.pages.dev";   
@@ -81,7 +81,7 @@ double   g_lastLot      = 0;  // Volume dari posisi terakhir yang ditutup
 int      g_lastDeal      = -1; // Ticket deal terakhir yang telah diproses
 bool     g_isFirstTrade = true; // Flag untuk perdagangan pertama
 
-#define PREFIX          "GRAFIKTABRANIJ"
+#define PREFIX          "GRAFIK TABRANIJ"
 #define COLOR_BG        C'45,45,45'    // Charcoal Grey (matching the image)
 #define COLOR_STRIPE    C'35,35,35'    // Darker Grey for stripes/alternating rows
 #define COLOR_HDR_BG    C'65,65,65'    // Lighter Slate Grey for headers (matching the image)
