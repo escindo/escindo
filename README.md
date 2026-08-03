@@ -20,13 +20,13 @@ Hai! 👋
 
 | Komponen         | Representasi Matematis    | Keterangan                          |
 |------------------|---------------------------|-------------------------------------|
-| 1. **T**inggi    | Jarak                     | Harga tertinggi                     |
+| 1. **T**inggi    | Batas                     | Harga tertinggi                     |
 | 2. **A**tas      | Kodomain                  | Riwayat pergerakan atas             |
 | 3. **B**awah     | Kodomain                  | Riwayat pergerakan bawah            |
-| 4. **R**endah    | Jarak                     | Harga terendah                      |
-| 5. **A**wal      | Konstanta                 | Harga pembukaan / nilai awal        |
+| 4. **R**endah    | Batas                     | Harga terendah                      |
+| 5. **A**wal      | Konstanta                 | Harga pembukaan / harga awal        |
 | 6. **N**eto      | Domain                    | Area pergerakan efektif             |
-| 7. **I**nti      | Variabel                  | Harga sekarang / nilai penutupan    |
+| 7. **I**nti      | Variabel                  | Harga sekarang / harga penutupan    |
 | 8. **J**ulat     | Jangkauan                 | Jangkauan keseluruhan pergerakan    |
 
 ---
@@ -35,7 +35,7 @@ Hai! 👋
 
 **Grafik Tabranij** adalah sebuah kerangka analisis visual yang menyajikan **riwayat dan dinamika pergerakan harga** secara lengkap dan terstruktur.
 
-Ia menggabungkan delapan elemen utama harga (High, Low, Open, Range, Upper/Lower Bound, Net Movement, dll) ke dalam satu representasi yang mudah dibaca, sehingga trader dapat dengan cepat memahami:
+Ia menggabungkan delapan elemen utama harga (High, Low, Open, Range, Upper/Lower Bound, Net Movement, dll) ke dalam satu representasi yang mudah dibaca, sehingga pesaldo dapat dengan cepat memahami:
 
 - Kekuatan tren
 - Potensi reversal
