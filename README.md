@@ -12,7 +12,7 @@ Hai! 👋
 **G**enesis · **R**iwayat · **A**ngka · **F**aktual · **I**nformasi · **K**euangan
 
 **TABRANIJ** adalah singkatan dari:  
-**T**inggi · **A**tas · **B**awah · **R**endah · **A**wal · **N**eto · **I**nti · **J**angkauan
+**T**inggi · **A**tas · **B**awah · **R**endah · **A**wal · **N**eto · **I**nti · **J**ulat
 
 ---
 
@@ -20,14 +20,14 @@ Hai! 👋
 
 | Komponen         | Representasi Matematis    | Keterangan                          |
 |------------------|---------------------------|-------------------------------------|
-| 1. **T**inggi    | Range                     | Harga tertinggi                     |
+| 1. **T**inggi    | Jarak                     | Harga tertinggi                     |
 | 2. **A**tas      | Kodomain                  | Riwayat pergerakan atas             |
 | 3. **B**awah     | Kodomain                  | Riwayat pergerakan bawah            |
-| 4. **R**endah    | Range                     | Harga terendah                      |
+| 4. **R**endah    | Jarak                     | Harga terendah                      |
 | 5. **A**wal      | Konstanta                 | Harga pembukaan / nilai awal        |
 | 6. **N**eto      | Domain                    | Area pergerakan efektif             |
-| 7. **I**nti      | Variabel                  | Harga saat ini / nilai penutupan    |
-| 8. **J**angkauan | Himpunan                  | Jangkauan keseluruhan pergerakan    |
+| 7. **I**nti      | Variabel                  | Harga sekarang / nilai penutupan    |
+| 8. **J**ulat     | Jangkauan                 | Jangkauan keseluruhan pergerakan    |
 
 ---
 
@@ -58,7 +58,7 @@ Dengan memahami kedelapan elemen ini, trader dapat melihat:
 - Berguna untuk **Day Trading, Swing Trading, dan Scalping**
 - Dapat dikombinasikan dengan indikator teknikal lain (MA, RSI, Volume, dll)
 
-### Keunggulan dalam Trading
+### Keunggulan dalam Pesaldo
 
 - Sangat sesuai untuk **MetaTrader 5 (MT5)** sebagai custom indicator
 - Membantu deteksi dini perubahan momentum
