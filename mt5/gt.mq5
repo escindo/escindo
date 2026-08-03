@@ -224,6 +224,7 @@ void OnTick()
    UpdateGUILabels(); 
    ExecuteTradingLogic();
    if(extShowGTChart) DrawGTLevels();
+   WriteGenesisJSON();   // kirim data ke TanyaHargaBot
 }
 
 void OnTimer() { UpdateCountdown(); }
@@ -773,6 +774,116 @@ void UpdateInfoSection()
    SetVal(PREFIX + "Sym_SOPriceVal", stopOutPriceStr, riskColor);
    SetVal(PREFIX + "Sym_SOPtsVal",   ptsToSOStr,      riskColor);
 }
+
+
+//+------------------------------------------------------------------+
+//| Tulis data Genesis ke file JSON (dibaca oleh TanyaHargaBot)      |
+//| File: MQL5/Files/genesis_data.json (atau Common\Files)           |
+//+------------------------------------------------------------------+
+void WriteGenesisJSON()
+{
+   // Hitung data GT LIVE (shift 0) — sama seperti UpdateBarData
+   double open0  = iOpen (_Symbol, PERIOD_CURRENT, 0);
+   double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+   double high0  = iHigh (_Symbol, PERIOD_CURRENT, 0);
+   double low0   = iLow  (_Symbol, PERIOD_CURRENT, 0);
+   if(open0 == 0) return;
+
+   int    oc0 = (int)((close0 - open0) / myPoint);
+   int    lh0 = (int)((high0  - low0)  / myPoint);
+   double bH0 = MathMax(open0, close0);
+   double bL0 = MathMin(open0, close0);
+   int    ch0 = (int)((high0 - bH0) / myPoint);
+   int    cl0 = (int)((bL0 - low0) / myPoint);
+
+   // GT1, GT2, GT3 (opsional, untuk riwayat)
+   double open1  = iOpen (_Symbol, PERIOD_CURRENT, 1);
+   double close1 = iClose(_Symbol, PERIOD_CURRENT, 1);
+   double high1  = iHigh (_Symbol, PERIOD_CURRENT, 1);
+   double low1   = iLow  (_Symbol, PERIOD_CURRENT, 1);
+
+   double open2  = iOpen (_Symbol, PERIOD_CURRENT, 2);
+   double close2 = iClose(_Symbol, PERIOD_CURRENT, 2);
+   double high2  = iHigh (_Symbol, PERIOD_CURRENT, 2);
+   double low2   = iLow  (_Symbol, PERIOD_CURRENT, 2);
+
+   double open3  = iOpen (_Symbol, PERIOD_CURRENT, 3);
+   double close3 = iClose(_Symbol, PERIOD_CURRENT, 3);
+   double high3  = iHigh (_Symbol, PERIOD_CURRENT, 3);
+   double low3   = iLow  (_Symbol, PERIOD_CURRENT, 3);
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   int    spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   string waktu = TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+
+   // Bangun JSON manual (tanpa library)
+   string json = "{";
+   json += "\"symbol\":\"" + _Symbol + "\",";
+   json += "\"time\":\"" + waktu + "\",";
+   json += "\"bid\":" + DoubleToString(bid, myDigits) + ",";
+   json += "\"ask\":" + DoubleToString(ask, myDigits) + ",";
+   json += "\"price\":" + DoubleToString((bid+ask)/2.0, myDigits) + ",";
+   json += "\"spread\":" + IntegerToString(spread) + ",";
+
+   // === GT LIVE (utama) ===
+   json += "\"open\":"  + DoubleToString(open0,  myDigits) + ",";
+   json += "\"high\":"  + DoubleToString(high0,  myDigits) + ",";
+   json += "\"low\":"   + DoubleToString(low0,   myDigits) + ",";
+   json += "\"close\":" + DoubleToString(close0, myDigits) + ",";
+   json += "\"awal\":"  + DoubleToString(open0,  myDigits) + ",";
+   json += "\"tinggi\":"+ DoubleToString(high0,  myDigits) + ",";
+   json += "\"bawah\":" + DoubleToString(low0,   myDigits) + ",";
+   json += "\"atas\":"  + DoubleToString(bH0,    myDigits) + ",";
+   json += "\"badan_bawah\":" + DoubleToString(bL0, myDigits) + ",";
+   json += "\"neto\":"  + IntegerToString(oc0) + ",";
+   json += "\"inti\":"  + DoubleToString(close0, myDigits) + ",";
+   json += "\"jangkauan\":" + IntegerToString(lh0) + ",";
+   json += "\"ch\":" + IntegerToString(ch0) + ",";
+   json += "\"cl\":" + IntegerToString(cl0) + ",";
+
+   // === Riwayat GT1 GT2 GT3 ===
+   json += "\"gt1\":{";
+   json += "\"open\":" + DoubleToString(open1,myDigits) + ",\"high\":" + DoubleToString(high1,myDigits);
+   json += ",\"low\":" + DoubleToString(low1,myDigits) + ",\"close\":" + DoubleToString(close1,myDigits);
+   json += ",\"neto\":" + IntegerToString((int)((close1-open1)/myPoint));
+   json += ",\"jangkauan\":" + IntegerToString((int)((high1-low1)/myPoint)) + "},";
+
+   json += "\"gt2\":{";
+   json += "\"open\":" + DoubleToString(open2,myDigits) + ",\"high\":" + DoubleToString(high2,myDigits);
+   json += ",\"low\":" + DoubleToString(low2,myDigits) + ",\"close\":" + DoubleToString(close2,myDigits);
+   json += ",\"neto\":" + IntegerToString((int)((close2-open2)/myPoint));
+   json += ",\"jangkauan\":" + IntegerToString((int)((high2-low2)/myPoint)) + "},";
+
+   json += "\"gt3\":{";
+   json += "\"open\":" + DoubleToString(open3,myDigits) + ",\"high\":" + DoubleToString(high3,myDigits);
+   json += ",\"low\":" + DoubleToString(low3,myDigits) + ",\"close\":" + DoubleToString(close3,myDigits);
+   json += ",\"neto\":" + IntegerToString((int)((close3-open3)/myPoint));
+   json += ",\"jangkauan\":" + IntegerToString((int)((high3-low3)/myPoint)) + "},";
+
+   json += "\"balance\":" + DoubleToString(balance, 2) + ",";
+   json += "\"equity\":"  + DoubleToString(equity, 2) + ",";
+   json += "\"timeframe\":\"" + EnumToString(Period()) + "\"";
+   json += "}";
+
+   // Tulis ke MQL5/Files/genesis_data.json (folder terminal)
+   // FILE_COMMON = bisa dibaca dari luar lebih mudah (Common\Files)
+   int h = FileOpen("genesis_data.json", FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(h == INVALID_HANDLE)
+   {
+      // Fallback tanpa FILE_COMMON
+      h = FileOpen("genesis_data.json", FILE_WRITE|FILE_TXT|FILE_ANSI);
+   }
+   if(h != INVALID_HANDLE)
+   {
+      FileWriteString(h, json);
+      FileClose(h);
+   }
+}
+
 
 void UpdateBarData(int shift, string suffix, color baseClr)
 {
