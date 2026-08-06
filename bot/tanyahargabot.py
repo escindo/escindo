@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TanyaHargaBot - Alat dan teman pemburu saldo gold (XAUUSD) di MT5 dengan bahasa Indonesia 
+TanyaHargaBot - Alat dan teman pemburu saldo gold (XAUUSD) di MT5 dengan bahasa Indonesia
 Menu lengkap: harga aktual, arus, sinyal transaksi, harga puncak/lembah, isu/rumor pasar, ringkasan, sistem & strategi
 """
 
@@ -11,6 +11,12 @@ import asyncio
 import random
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
+from pathlib import Path
+
+# Pastikan folder project ada di sys.path (agar import services.* selalu jalan)
+_ROOT = Path(__file__).resolve().parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import yfinance as yf
 from dotenv import load_dotenv
@@ -38,6 +44,14 @@ except ImportError:
     baca_genesis = None
     get_mt5_price = None
 
+# Sinyal pintar berbasis GT (Sinyal A-E)
+buat_sinyal_pintar = None
+try:
+    from services.signal_engine import buat_sinyal_pintar as _bsp
+    buat_sinyal_pintar = _bsp
+except Exception as _e:
+    logging.getLogger(__name__).warning(f"Gagal import signal_engine: {_e}")
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -50,10 +64,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+if buat_sinyal_pintar:
+    logger.info("Engine sinyal pintar (Sinyal A-E) aktif")
+else:
+    logger.warning("Engine sinyal pintar TIDAK aktif — cek folder services/")
+
 
 # ==================== KEYBOARD MENU ====================
 def menu_utama() -> ReplyKeyboardMarkup:
-    """Keyboard tetap di bawah chat."""
     keyboard = [
         [KeyboardButton("💰 Harga Aktual"), KeyboardButton("📐 GT")],
         [KeyboardButton("📈 Arus"), KeyboardButton("🎯 Sinyal")],
@@ -65,7 +83,6 @@ def menu_utama() -> ReplyKeyboardMarkup:
 
 
 def tombol_aksi() -> InlineKeyboardMarkup:
-    """Tombol cepat setelah melihat hasil."""
     keyboard = [
         [
             InlineKeyboardButton("💰 Harga", callback_data="harga"),
@@ -88,15 +105,37 @@ def tombol_aksi() -> InlineKeyboardMarkup:
 
 
 def _h(text) -> str:
-    """Escape HTML untuk teks dinamis (aman di parse_mode HTML)."""
     if text is None:
         return "-"
     s = str(text)
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return s.replace("&", "&").replace("<", "<").replace(">", ">")
+
+
+def _n(v, digits=2) -> str:
+    """Format angka TANPA koma ribuan. Contoh: 4271.53"""
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+        if digits == 0:
+            return str(int(round(f)))
+        return f"{f:.{digits}f}"
+    except Exception:
+        return str(v)
+
+
+def _pts(v) -> str:
+    """Format poin (neto/julat/atas/bawah) tanpa koma."""
+    if v is None:
+        return "-"
+    try:
+        n = int(round(float(v)))
+        return str(n)
+    except Exception:
+        return str(v)
 
 
 def _md(text: str) -> str:
-    """Escape karakter yang merusak Telegram Markdown legacy."""
     if text is None:
         return "-"
     s = str(text)
@@ -108,7 +147,6 @@ def _md(text: str) -> str:
 # ==================== DATA HARGA ====================
 
 async def _fetch_data(timeout: float = 12.0) -> Dict[str, Any]:
-    """Ambil data di thread terpisah supaya bot tidak freeze, dengan timeout."""
     loop = asyncio.get_event_loop()
     try:
         return await asyncio.wait_for(
@@ -123,12 +161,6 @@ async def _fetch_data(timeout: float = 12.0) -> Dict[str, Any]:
 
 
 def get_gold_data() -> Dict[str, Any]:
-    """
-    Prioritas:
-    1. Genesis EA / MT5 (faktual broker)
-    2. Yahoo Finance (fallback)
-    """
-    # Coba MT5 / Genesis dulu
     if get_harga_lengkap:
         try:
             mt5d = get_harga_lengkap("XAUUSD")
@@ -140,18 +172,39 @@ def get_gold_data() -> Dict[str, Any]:
                 change = mt5d.get("neto")
                 change_pct = None
                 if change is not None and open_p:
-                    change_pct = round((change / open_p) * 100, 3)
+                    try:
+                        change_pct = round((float(change) / float(open_p)) * 100, 3)
+                    except Exception:
+                        change_pct = None
 
-                # Tren sederhana dari neto
                 if change is not None:
-                    if change > 0.5:
-                        arus, arus_desc = "NAIK 📈", "Neto positif"
-                    elif change < -0.5:
-                        arus, arus_desc = "TURUN 📉", "Neto negatif"
-                    else:
-                        arus, arus_desc = "DATAR ↔️", "Neto sempit"
+                    try:
+                        c = float(change)
+                        if c > 0.5:
+                            arus, arus_desc = "NAIK 📈", "Neto positif"
+                        elif c < -0.5:
+                            arus, arus_desc = "TURUN 📉", "Neto negatif"
+                        else:
+                            arus, arus_desc = "DATAR ↔️", "Neto sempit"
+                    except Exception:
+                        arus, arus_desc = "N/A", "Data arus terbatas"
                 else:
                     arus, arus_desc = "N/A", "Data arus terbatas"
+
+                raw = mt5d.get("raw")
+                if not isinstance(raw, dict):
+                    raw = mt5d
+
+                julat = mt5d.get("julat")
+                if julat is None:
+                    julat = mt5d.get("jangkauan")
+                if julat is None and isinstance(raw, dict):
+                    julat = raw.get("julat") or raw.get("jangkauan")
+                if julat is None and high is not None and low is not None:
+                    try:
+                        julat = round(float(high) - float(low), 2)
+                    except Exception:
+                        julat = None
 
                 return {
                     "price": price,
@@ -167,22 +220,22 @@ def get_gold_data() -> Dict[str, Any]:
                     "mid": mt5d.get("inti"),
                     "bid": mt5d.get("bid"),
                     "ask": mt5d.get("ask"),
-                    "spread": mt5d.get("spread"),
-                    "neto": mt5d.get("neto"),
-                    "inti": mt5d.get("inti"),
-                    "julat": mt5d.get("julat"),
+                    "spread": mt5d.get("spread") or (raw.get("spread") if isinstance(raw, dict) else None),
+                    "neto": mt5d.get("neto") if mt5d.get("neto") is not None else (raw.get("neto") if isinstance(raw, dict) else None),
+                    "inti": mt5d.get("inti") or (raw.get("inti") if isinstance(raw, dict) else None),
+                    "julat": julat,
                     "tinggi": mt5d.get("tinggi") or high,
                     "bawah": mt5d.get("bawah") or low,
                     "awal": mt5d.get("awal") or open_p,
                     "time": mt5d.get("time", datetime.now().strftime("%d/%m/%Y %H:%M")),
                     "source": mt5d.get("source", "MT5/Genesis"),
-                    "raw": mt5d.get("raw"),
+                    "symbol": mt5d.get("symbol") or (raw.get("symbol") if isinstance(raw, dict) else "XAUUSD"),
+                    "raw": raw,
                     "from_mt5": True,
                 }
         except Exception as e:
             logger.warning(f"MT5/Genesis gagal, fallback Yahoo: {e}")
 
-    # Fallback Yahoo Finance
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="5d", interval="1h")
@@ -240,52 +293,11 @@ def get_gold_data() -> Dict[str, Any]:
             "time": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
             "source": "Yahoo Finance (GC=F)",
             "from_mt5": False,
+            "raw": {},
         }
     except Exception as e:
         logger.error(f"Error ambil data: {e}")
         return {"error": f"Gagal mengambil data: {e}"}
-
-
-def buat_sinyal(data: Dict[str, Any]) -> str:
-    if data.get("error") or not data.get("price"):
-        return "⚠️ Data tidak tersedia."
-
-    change = data.get("change_pct") or 0
-    arus = data.get("arus", "")
-    price = data["price"]
-    lembah = data.get("lembah", 0)
-    puncak = data.get("puncak", 0)
-
-    jarak_sup = ((price - lembah) / price) * 100 if price else 0
-    jarak_res = ((puncak - price) / price) * 100 if price else 0
-
-    if "NAIK" in arus and change > 0.1:
-        sinyal = "🟢 BUY / LONG"
-        alasan = (
-            f"Arus naik + momentum positif.\n"
-            f"• Masuk sekitar: ${price:,.2f}\n"
-            f"• SL ide: di bawah lembah ${lembah:,.2f}\n"
-            f"• TP ide: dekat puncak ${puncak:,.2f}"
-        )
-    elif "TURUN" in arus and change < -0.1:
-        sinyal = "🔴 SELL / SHORT"
-        alasan = (
-            f"Arus turun + momentum negatif.\n"
-            f"• Masuk sekitar: ${price:,.2f}\n"
-            f"• SL ide: di atas puncak ${puncak:,.2f}\n"
-            f"• TP ide: dekat lembah ${lembah:,.2f}"
-        )
-    elif jarak_sup < 0.15:
-        sinyal = "🟡 LIHAT LEMBAH"
-        alasan = "Harga dekat lembah. Pantau apakah hold atau break."
-    elif jarak_res < 0.15:
-        sinyal = "🟡 LIHAT PUNCAK"
-        alasan = "Harga dekat puncak. Pantau apakah ayunan atau trobosan."
-    else:
-        sinyal = "🟠 TUNGGU / DATAR"
-        alasan = "Arah belum jelas. Tunggu trobosan atau konfirmasi lebih kuat."
-
-    return f"<b>Sinyal:</b> {sinyal}\n\n{alasan}"
 
 
 def get_isu() -> str:
@@ -305,16 +317,13 @@ def get_isu() -> str:
     return "\n\n".join(terpilih)
 
 
-# ==================== SISTEM & STRATEGI ====================
 def format_strategi(data: Dict[str, Any] = None) -> str:
-    """Fitur: Sistem & Strategi Pemburu Saldo Gold."""
     if data is None:
         data = {}
 
     rekomendasi = ""
     if data and not data.get("error") and data.get("arus"):
         arus = data.get("arus", "")
-        price = data.get("price", 0)
         lembah = data.get("lembah", 0)
         puncak = data.get("puncak", 0)
 
@@ -324,7 +333,7 @@ def format_strategi(data: Dict[str, Any] = None) -> str:
                 f"• Utamakan <b>Ikut golongan Neto naik / Ayunan ke bawah Buy</b>\n"
                 f"• Masuk transaksi ideal: Mendekati perhentian bawah / MA\n"
                 f"• Hindari melawan arus dengan sell agresif\n"
-                f"• Target: dekat puncak ${puncak:,.2f}"
+                f"• Target: dekat puncak {_n(puncak)}"
             )
         elif "TURUN" in arus:
             rekomendasi = (
@@ -332,7 +341,7 @@ def format_strategi(data: Dict[str, Any] = None) -> str:
                 f"• Utamakan <b>Ikut golongan Neto turun / Ayunan ke atas Sell</b>\n"
                 f"• Masuk transaksi ideal: Mendekati puncak / MA\n"
                 f"• Hindari melawan arus dengan buy agresif\n"
-                f"• Target: dekat lembah ${lembah:,.2f}"
+                f"• Target: dekat lembah {_n(lembah)}"
             )
         else:
             rekomendasi = (
@@ -382,53 +391,107 @@ def format_strategi(data: Dict[str, Any] = None) -> str:
 
 # ==================== FORMAT PESAN ====================
 def format_harga(data: Dict[str, Any]) -> str:
+    """
+    Format Harga Live sesuai contoh user:
+    - tanpa koma ribuan
+    - tampilkan data GT LIVE (Tinggi/Atas/Bawah/Rendah/Awal/Neto/Inti/Julat)
+    """
     if data.get("error"):
-        return f"❌ {data['error']}"
-    
+        return f"❌ {_h(data['error'])}"
+
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+
+    # Ambil nilai LIVE
+    inti = data.get("inti") or data.get("price") or raw.get("inti") or raw.get("close") or raw.get("price")
+    awal = data.get("awal") or data.get("open") or raw.get("awal") or raw.get("open")
+    tinggi = data.get("tinggi") or data.get("high") or raw.get("tinggi") or raw.get("high")
+    rendah = data.get("bawah") or data.get("low") or raw.get("bawah") or raw.get("low")
+    neto = data.get("neto") if data.get("neto") is not None else raw.get("neto")
+    julat = data.get("julat") if data.get("julat") is not None else (
+        raw.get("julat") if raw.get("julat") is not None else raw.get("jangkauan")
+    )
+
+    # Atas / Bawah (wick)
+    atas = raw.get("ch")
+    bawah_wick = raw.get("cl")
+    if atas is None or bawah_wick is None:
+        try:
+            o = float(awal) if awal is not None else None
+            h = float(tinggi) if tinggi is not None else None
+            l = float(rendah) if rendah is not None else None
+            c = float(inti) if inti is not None else None
+            if o is not None and h is not None and l is not None and c is not None:
+                point = 0.01
+                if atas is None:
+                    atas = int(round((h - max(o, c)) / point))
+                if bawah_wick is None:
+                    bawah_wick = int(round((min(o, c) - l) / point))
+        except Exception:
+            pass
+
+    # Perubahan (pakai change dari data, fallback ke neto)
     change = data.get("change")
     change_pct = data.get("change_pct")
+    if change is None and neto is not None:
+        # neto di Genesis biasanya dalam points; tampilkan apa adanya
+        change = neto
+
     if change is not None:
-        tanda = "🟢" if change >= 0 else "🔴"
-        change_str = f"{tanda} {change:+.2f}"
-        if change_pct is not None:
-            change_str += f" ({change_pct:+.3f}%)"
+        try:
+            c = float(change)
+            tanda = "🟢" if c >= 0 else "🔴"
+            change_str = f"{tanda} {_n(c)}"
+            if change_pct is not None:
+                change_str += f" ({float(change_pct):+.3f}%)"
+        except Exception:
+            change_str = str(change)
     else:
         change_str = "-"
 
-    src_label = data.get("source", "-")
-    if src_label and "genesis_data" in str(src_label).lower():
-        src_label = "Genesis EA (kebun saldo)"
-    elif src_label and "Genesis EA" in str(src_label):
-        src_label = "Genesis EA (kebun saldo)"
+    # Label TF
+    tf_raw = str(raw.get("timeframe") or "")
+    if tf_raw.startswith("PERIOD_"):
+        tf_raw = tf_raw.replace("PERIOD_", "", 1)
+    tf_label = tf_raw if tf_raw and tf_raw != "-" else "M1"
+
+    src_label = "Genesis EA Kebun Saldo"
+    if not data.get("from_mt5"):
+        src_label = data.get("source") or "Yahoo Finance"
 
     lines = [
         "💰 <b>Harga Gold (XAUUSD)</b>",
         "━━━━━━━━━━━━━━━━━━━━",
-        "Harga sekarang",
-        f"Inti : <b>${data['price']:,.2f}</b>",
+        f"Harga Live {tf_label}",
+        f"Inti : {_n(inti)}",
+        f"Awal : {_n(awal)}",
+        f"Tinggi : {_n(tinggi)}",
+        f"Rendah : {_n(rendah)}",
+        f"Perubahan : {change_str}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"Tinggi : {_n(tinggi)}",
+        f"Atas : {_pts(atas)}",
+        f"Bawah : {_pts(bawah_wick)}",
+        f"Rendah : {_n(rendah)}",
+        f"Awal : {_n(awal)}",
+        f"Neto : {_pts(neto)}",
+        f"Inti : {_n(inti)}",
+        f"Julat : {_pts(julat)}",
+        "",
+        f"Perubahan : {change_str}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🕐 {_h(data.get('time', '-'))}",
+        f"📡 {_h(src_label)}",
     ]
-
-    if data.get("open") is not None:
-        lines.append(f"Awal                : ${data['open']:,.2f}")
-    if data.get("high") is not None:
-        lines.append(f"Tinggi              : ${data['high']:,.2f}")
-    if data.get("low") is not None:
-        lines.append(f"Rendah              : ${data['low']:,.2f}")
-
-    lines.append(f"Perubahan           : {change_str}")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append(f"🕐 {_h(data.get('time', '-'))}")
-    lines.append(f"📡 {_h(src_label)}")
-
     return "\n".join(lines)
 
 
 def format_mt5_genesis(data: Dict[str, Any]) -> str:
-    """Tampilkan data faktual GT (tabel rapi seperti dashboard EA)."""
     if data.get("error"):
         return f"❌ {_h(data['error'])}"
 
-    if not data.get("from_mt5") and not data.get("raw"):
+    raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
+
+    if not data.get("from_mt5") and not raw:
         return (
             "📐 <b>GT</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -441,15 +504,8 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
             "Sementara menu <b>Harga Aktual</b> memakai Yahoo Finance."
         )
 
-    raw = data.get("raw") or {}
-
     def num(v, digits=2):
-        if v is None:
-            return "-"
-        try:
-            return f"{float(v):,.{digits}f}"
-        except Exception:
-            return str(v)
+        return _n(v, digits)
 
     def pts(v):
         if v is None:
@@ -480,12 +536,14 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
     gt2 = bar_dict(raw.get("gt2"))
     gt3 = bar_dict(raw.get("gt3"))
 
-    live_open = data.get("awal") or data.get("open") or raw.get("open")
-    live_high = data.get("tinggi") or data.get("high") or raw.get("high")
-    live_low = data.get("bawah") or data.get("low") or raw.get("low")
-    live_close = data.get("inti") or data.get("close") or raw.get("close")
+    live_open = data.get("awal") or data.get("open") or raw.get("open") or raw.get("awal")
+    live_high = data.get("tinggi") or data.get("high") or raw.get("high") or raw.get("tinggi")
+    live_low = data.get("bawah") or data.get("low") or raw.get("low") or raw.get("bawah")
+    live_close = data.get("inti") or data.get("close") or raw.get("close") or raw.get("inti")
     live_neto = data.get("neto") if data.get("neto") is not None else raw.get("neto")
-    live_range = data.get("julat") if data.get("julat") is not None else raw.get("julat")
+    live_range = data.get("julat") if data.get("julat") is not None else (
+        raw.get("julat") if raw.get("julat") is not None else raw.get("jangkauan")
+    )
 
     live_atas = raw.get("ch")
     live_bawah = raw.get("cl")
@@ -517,8 +575,8 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
         return pts(v).rjust(width)
 
     rows = []
-    rows.append("           GT3      GT2      GT1     LIVE")
-    rows.append("──────── ──────── ──────── ──────── ────────")
+    rows.append("            GT3       GT2       GT1       LIVE")
+    rows.append("──────    ───────   ───────   ───────   ───────")
     rows.append(f"Tinggi  {col(gt3.get('high'))} {col(gt2.get('high'))} {col(gt1.get('high'))} {col(live_high)}")
     rows.append(f"Atas    {col_pts(a3)} {col_pts(a2)} {col_pts(a1)} {col_pts(live_atas)}")
     rows.append(f"Bawah   {col_pts(b3)} {col_pts(b2)} {col_pts(b1)} {col_pts(live_bawah)}")
@@ -539,10 +597,7 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
         tf_raw = tf_raw.replace("PERIOD_", "", 1)
     tf = _h(tf_raw)
     waktu = _h(data.get("time") or raw.get("time") or "-")
-    sumber_raw = data.get("source") or "Genesis EA (kebun saldo)"
-    if "genesis_data" in str(sumber_raw).lower() or "Genesis EA" in str(sumber_raw):
-        sumber_raw = "Genesis EA (kebun saldo)"
-    sumber = _h(sumber_raw)
+    sumber = _h("Genesis EA Kebun Saldo")
 
     balance = raw.get("balance")
     equity = raw.get("equity")
@@ -560,11 +615,11 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
             pl_v = float(symbol_pl)
             pl_pts = int(symbol_pl_pts) if symbol_pl_pts is not None else 0
             if pl_v > 0.005:
-                pl_str = f"+{pl_v:,.2f} (+{pl_pts} pts)"
+                pl_str = f"+{_n(pl_v)} (+{pl_pts} pts)"
             elif pl_v < -0.005:
-                pl_str = f"{pl_v:,.2f} ({pl_pts} pts)"
+                pl_str = f"{_n(pl_v)} ({pl_pts} pts)"
             else:
-                pl_str = f"{pl_v:,.2f} (0 pts)"
+                pl_str = f"{_n(pl_v)} (0 pts)"
         except Exception:
             pl_str = str(symbol_pl)
     else:
@@ -574,15 +629,15 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
         f"📐 <b>Data Faktual GT</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"Simbol  : <b>{simbol}</b>  |  TF: {tf}\n"
-        f"Harga   : <b>${harga}</b>\n"
-        f"Bid/Ask : ${bid} / ${ask}\n"
+        f"Harga   : <b>{harga}</b>\n"
+        f"Bid/Ask : {bid} / {ask}\n"
         f"Spread  : {spread if spread is not None else '-'}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>Genesis Riwayat Angka Faktual Informasi Keuangan</b>\n"
         f"<i>Tinggi · Atas · Bawah · Rendah · Awal · Neto · Inti · Julat</i>\n"
         f"<pre>{table}</pre>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Posisi &amp; Akun</b>\n"
+        f"<b>Posisi & Akun</b>\n"
         f"<pre>"
         f"Balance      : {num(balance)}\n"
         f"Equity       : {num(equity)}\n"
@@ -603,14 +658,22 @@ def format_mt5_genesis(data: Dict[str, Any]) -> str:
 
 def format_tren(data: Dict[str, Any]) -> str:
     if data.get("error"):
-        return f"❌ {data['error']}"
+        return f"❌ {_h(data['error'])}"
+    ch = data.get("change")
+    cp = data.get("change_pct")
+    try:
+        ch_str = f"{_n(ch)}" if ch is not None else "-"
+        if cp is not None:
+            ch_str += f" ({float(cp):+.3f}%)"
+    except Exception:
+        ch_str = str(ch)
     return (
         f"📈 <b>Analisis Arus Gold</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Harga   : <b>${data['price']:,.2f}</b>\n"
-        f"Arus    : <b>{data['arus']}</b>\n"
-        f"Keterangan : {data['arus_desc']}\n"
-        f"Perubahan  : {data['change']:+.2f} ({data['change_pct']:+.3f}%)\n"
+        f"Harga   : <b>{_n(data.get('price'))}</b>\n"
+        f"Arus    : <b>{_h(data.get('arus'))}</b>\n"
+        f"Keterangan : {_h(data.get('arus_desc'))}\n"
+        f"Perubahan  : {ch_str}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Berdasarkan Moving Average periode pendek vs panjang.</i>"
     )
@@ -618,14 +681,31 @@ def format_tren(data: Dict[str, Any]) -> str:
 
 def format_sinyal(data: Dict[str, Any]) -> str:
     if data.get("error"):
-        return f"❌ {data['error']}"
-    sinyal_text = buat_sinyal(data)
+        return f"❌ {_h(data['error'])}"
+
+    if buat_sinyal_pintar is not None:
+        try:
+            return buat_sinyal_pintar(data)
+        except Exception as e:
+            logger.error(f"Error buat_sinyal_pintar: {e}")
+            return (
+                f"🎯 <b>Sinyal</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"❌ Error engine sinyal: {_h(str(e))}\n"
+                f"Harga: {_n(data.get('price', 0))}\n"
+                f"━━━━━━━━━━━━━━━━━━━━"
+            )
+
+    price = data.get("price", 0)
+    arus = data.get("arus", "-")
     return (
         f"🎯 <b>Sinyal Transaksi Gold</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Harga : <b>${data['price']:,.2f}</b>\n"
-        f"Arus  : {data['arus']}\n\n"
-        f"{sinyal_text}\n"
+        f"Harga : <b>{_n(price)}</b>\n"
+        f"Arus  : {_h(arus)}\n\n"
+        f"⚠️ Engine sinyal pintar belum tersedia.\n"
+        f"Pastikan folder <code>services/signal_engine.py</code> ada\n"
+        f"dan bot dijalankan dari folder project.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ <i>Bukan saran finansial. Gunakan risk management.</i>"
     )
@@ -633,7 +713,7 @@ def format_sinyal(data: Dict[str, Any]) -> str:
 
 def format_sr(data: Dict[str, Any]) -> str:
     if data.get("error"):
-        return f"❌ {data['error']}"
+        return f"❌ {_h(data['error'])}"
     price = data["price"]
     lem = data["lembah"]
     pun = data["puncak"]
@@ -641,11 +721,11 @@ def format_sr(data: Dict[str, Any]) -> str:
     return (
         f"📊 <b>Puncak & Lembah</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Harga sekarang : <b>${price:,.2f}</b>\n\n"
-        f"🔴 Puncak  : <b>${pun:,.2f}</b>\n"
+        f"Harga sekarang : <b>{_n(price)}</b>\n\n"
+        f"🔴 Puncak  : <b>{_n(pun)}</b>\n"
         f"   Jarak       : {((pun - price) / price * 100):+.2f}%\n\n"
-        f"⚪ Midpoint    : ${mid:,.2f}\n\n"
-        f"🟢 Lembah     : <b>${lem:,.2f}</b>\n"
+        f"⚪ Midpoint    : {_n(mid)}\n\n"
+        f"🟢 Lembah     : <b>{_n(lem)}</b>\n"
         f"   Jarak       : {((price - lem) / price * 100):+.2f}%\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Dihitung dari tinggi/rendah 48 bar terakhir.</i>"
@@ -665,32 +745,37 @@ def format_isu() -> str:
 def format_full(data: Dict[str, Any]) -> str:
     if data.get("error"):
         return f"❌ {_h(data['error'])}"
-    sinyal_text = buat_sinyal(data)
-    def n(v, fmt="{:,.2f}"):
-        if v is None:
-            return "-"
+
+    if buat_sinyal_pintar is not None:
         try:
-            return fmt.format(float(v))
-        except Exception:
-            return str(v)
+            sinyal_text = buat_sinyal_pintar(data)
+        except Exception as e:
+            sinyal_text = f"Sinyal error: {_h(str(e))}"
+    else:
+        sinyal_text = "Sinyal: engine belum aktif"
+
     ch = data.get("change")
     cp = data.get("change_pct")
-    ch_str = f"{ch:+.2f}" if ch is not None else "-"
-    if cp is not None:
-        ch_str += f" ({cp:+.3f}%)"
+    try:
+        ch_str = f"{_n(ch)}" if ch is not None else "-"
+        if cp is not None:
+            ch_str += f" ({float(cp):+.3f}%)"
+    except Exception:
+        ch_str = str(ch)
+
     return (
         f"📋 <b>Ringkasan Lengkap Gold (XAUUSD)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Harga  : <b>${n(data.get('price'))}</b>\n"
-        f"   Open   : ${n(data.get('open'))}\n"
-        f"   High   : ${n(data.get('high'))}\n"
-        f"   Low    : ${n(data.get('low'))}\n"
+        f"💰 Harga  : <b>{_n(data.get('price'))}</b>\n"
+        f"   Open   : {_n(data.get('open'))}\n"
+        f"   High   : {_n(data.get('high'))}\n"
+        f"   Low    : {_n(data.get('low'))}\n"
         f"   Change : {ch_str}\n\n"
         f"📈 Arus   : <b>{_h(data.get('arus'))}</b>\n"
         f"   {_h(data.get('arus_desc'))}\n\n"
         f"📊 S/R\n"
-        f"   Puncak : ${n(data.get('puncak'))}\n"
-        f"   Lembah    : ${n(data.get('lembah'))}\n\n"
+        f"   Puncak : {_n(data.get('puncak'))}\n"
+        f"   Lembah : {_n(data.get('lembah'))}\n\n"
         f"{sinyal_text}\n\n"
         f"🕐 {_h(data.get('time'))}\n"
         f"⚠️ Bukan saran finansial."
@@ -702,7 +787,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     nama = user.first_name or "Pemburu"
     text = (
-        f"Halo <b>{nama}</b>! 👋\n\n"
+        f"Halo <b>{_h(nama)}</b>! 👋\n\n"
         f"Saya <b>TanyaHargaBot</b> — alat untuk pantau harga <b>Gold (XAUUSD)</b>.\n\n"
         f"Pilih menu di bawah:\n"
         f"• 💰 Harga Aktual\n"
@@ -715,11 +800,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"• 📋 Ringkasan Lengkap\n\n"
         f"Semoga pemburuan saldo-mu menyenangkan 🙏"
     )
-    await update.message.reply_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=menu_utama(),
-    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=menu_utama())
 
 
 async def bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -727,10 +808,10 @@ async def bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "❓ <b>Bantuan TanyaHargaBot</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "<b>Menu yang tersedia:</b>\n"
-        "💰 <b>Harga Aktual</b> — Harga live\n"
+        "💰 <b>Harga Aktual</b> — Harga live + data GT\n"
         "📐 <b>GT</b> — Data faktual dari EA Genesis\n"
         "📈 <b>Arus</b> — Arah pasar (naik/turun/datar)\n"
-        "🎯 <b>Sinyal</b> — Ide masuk sederhana + SL/TP\n"
+        "🎯 <b>Sinyal</b> — Sinyal pintar berbasis GT (A–E) + skor + SL/TP ide\n"
         "📊 <b>Puncak & Lembah</b> — Level penting\n"
         "📰 <b>Isu & Rumor</b> — Faktor yang sering gerakkan harga\n"
         "📚 <b>Sistem & Strategi</b> — Panduan sistem pemburuan + rekomendasi dinamis\n"
@@ -740,11 +821,7 @@ async def bantuan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Data dari Yahoo Finance / MT5 Genesis.\n"
         "⚠️ Bukan saran finansial. Selalu pakai risk management."
     )
-    await update.message.reply_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=menu_utama(),
-    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=menu_utama())
 
 
 async def kirim_harga(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -753,7 +830,7 @@ async def kirim_harga(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         data = await _fetch_data(12)
         await msg.edit_text(format_harga(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_arus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -762,16 +839,16 @@ async def kirim_arus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         data = await _fetch_data(12)
         await msg.edit_text(format_tren(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_sinyal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = await update.message.reply_text("⏳ Menyusun sinyal...")
+    msg = await update.message.reply_text("⏳ Menyusun sinyal pintar...")
     try:
         data = await _fetch_data(12)
         await msg.edit_text(format_sinyal(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_pl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -780,15 +857,11 @@ async def kirim_pl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         data = await _fetch_data(12)
         await msg.edit_text(format_sr(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_isu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        format_isu(),
-        parse_mode="HTML",
-        reply_markup=tombol_aksi(),
-    )
+    await update.message.reply_text(format_isu(), parse_mode="HTML", reply_markup=tombol_aksi())
 
 
 async def kirim_strategi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -797,7 +870,7 @@ async def kirim_strategi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         data = await _fetch_data(12)
         await msg.edit_text(format_strategi(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -806,7 +879,7 @@ async def kirim_full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         data = await _fetch_data(12)
         await msg.edit_text(format_full(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def kirim_mt5(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -815,7 +888,7 @@ async def kirim_mt5(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         data = await _fetch_data(8)
         await msg.edit_text(format_mt5_genesis(data), parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
-        await msg.edit_text(f"❌ Gagal: {e}", reply_markup=tombol_aksi())
+        await msg.edit_text(f"❌ Gagal: {_h(str(e))}", reply_markup=tombol_aksi())
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -853,13 +926,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=tombol_aksi())
     except Exception as e:
         try:
-            await query.edit_message_text(f"❌ Gagal memproses: {e}", reply_markup=tombol_aksi())
+            await query.edit_message_text(f"❌ Gagal memproses: {_h(str(e))}", reply_markup=tombol_aksi())
         except Exception:
             pass
 
 
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tangani tombol keyboard + kata kunci bebas."""
     text = (update.message.text or "").strip()
     text_lower = text.lower()
 
@@ -890,14 +962,13 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def post_init(application: Application) -> None:
-    """Set command list di menu Telegram."""
     commands = [
         BotCommand("start", "Mulai bot & tampilkan menu"),
         BotCommand("harga", "Harga aktual gold"),
         BotCommand("mt5", "Data faktual GT"),
         BotCommand("gt", "Data faktual GT"),
         BotCommand("arus", "Analisis arus"),
-        BotCommand("sinyal", "Sinyal transaksi"),
+        BotCommand("sinyal", "Sinyal pintar GT (A-E)"),
         BotCommand("pl", "Puncak & Lembah"),
         BotCommand("isu", "Isu & rumor pasar"),
         BotCommand("strategi", "Sistem & strategi transaksi"),
