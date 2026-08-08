@@ -5,10 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright   "MOCHAMAD TABRANI (c) 2026"
 #property link        "https://cindo.pages.dev"
-#property version     "1.00"
-#property description "EA GT Pesaldo - Komando Profit & Keamanan"
-#property description "========================================================"
-#property description "EA Perdagangan ini beroperasi berdasarkan Sinyal GT Besar."
+#property version     "1.10"
+#property description "EA GT Pesaldo - Multi Strategy Komando Profit & Keamanan"
+#property description "================================="
+#property description "Strategi: Trobosan | Layer | Zigzag | Sinyal GT (A-E)"
 #property description "Didesain spesifik untuk volatilitas tinggi (BTCUSD, XAUUSD, GOLDmicro)."
 
 //+------------------------------------------------------------------+
@@ -27,42 +27,55 @@ enum ENUM_THEME
     THEME_PURE_DARK    // Minimalist Grey
 };
 
+enum ENUM_STRATEGY
+{
+    STRAT_BREAKOUT = 0,  // Trobosan Breakout Martingale
+    STRAT_LAYER    = 1,  // Layer / Grid Averaging
+    STRAT_ZIGZAG   = 2,  // Zigzag Bouncing Martingale
+    STRAT_SIGNAL   = 3   // Sinyal GT A-E + SL/TP dari level GT
+};
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
 
 //--- System Information
-input string          _s0                  = "=========== EA GT PESALDO ==========="; 
-sinput string         Info_System          = "EA GT Pesaldo "; 
-sinput string         Info_Version         = "v0.01 [Grafik Tabranij]"; 
+input string          _s0                  = "=========== EA PESALDO ==========="; 
+sinput string         Info_System          = "EA Pesaldo "; 
+sinput string         Info_Version         = "v1.10 [Multi-Strategy GT]"; 
 sinput string         Info_Author          = "MOCHAMAD TABRANI";                  
 sinput string         Info_Support         = "cindo.pages.dev";   
 
 //--- Dashboard Layout
-input string          _s1                  = "=========== DASHBOARD GEOMETRY ===========";
+input string          _s1                  = "======== DASHBOARD GEOMETRY ========";
 input int             X_Offset             = 20;       // Horizontal Offset (Pixels)
 input int             Y_Offset             = 40;       // Vertical Offset (Pixels)
 input int             Panel_Width          = 600;      // Total Dashboard Width
 
 //--- Trading Engine Settings
-input string          _s2                  = "=========== GRAFIK TABRANIJ ALGO STRATEGY ===========";
-input ENUM_TIMEFRAMES InpGTTimeframe       = PERIOD_H1;     // GT Besar Timeframe/durasi (Signal Basis)
+input string          _s2                  = "======== GRAFIK TABRANIJ ALGO STRATEGY ========";
+input ENUM_STRATEGY   InpStrategy          = STRAT_BREAKOUT; // Pilih Strategi Trading
+input ENUM_TIMEFRAMES InpGTTimeframe       = PERIOD_H1;     // GT Besar Timeframe (Signal Basis)
 input double          InpLot               = 0.01;          // Base Lot Volume
-input double          InpMultiplier        = 2.0;           // Martingale Volume Multiplier
-input int             InpMaxSteps          = 5;             // Max Martingale Iterations
-input int             InpTP                = 300;           // Take Profit Distance (Points)
-input int             InpSL                = 150;           // Stop Loss Distance (Points)
+input double          InpMultiplier        = 2.0;           // Martingale / Layer Volume Multiplier
+input int             InpMaxSteps          = 5;             // Max Martingale / Layer Steps
+input int             InpTP                = 300;           // Take Profit Distance (Points) — fallback
+input int             InpSL                = 150;           // Stop Loss Distance (Points) — fallback
+input int             InpLayerStepPts      = 100;           // Jarak antar layer (points)
+input int             InpZigzagBouncePts   = 50;            // Toleransi bounce Zigzag (points)
+input bool            InpUseGTSLTP         = true;          // Pakai level GT untuk SL/TP
+input bool            InpRequireSignal     = false;         // Hanya entry jika sinyal A-E aktif
 input int             InpMagic             = 888999;        // Algorithm Serial ID
 
 //--- Theme & Color Settings
-input string          _s5                  = "=========== UI THEME & PALETTE ===========";
+input string          _s5                  = "======== UI THEME & PALETTE ========";
 input ENUM_THEME      InpTheme             = THEME_ONYX_GOLD;   // Active Visual Theme
 input color           Label_Color          = clrGold;           // Primary Label Color
 input color           Value_Color          = clrWhite;          // Numerical Value Color
 input color           Live_Color           = C'255,225,100';    // Real-time Accent Color
 
 //--- Chart Visualization
-input string          _s6                  = "=========== CHART VISUALIZATION ===========";
+input string          _s6                  = "======== CHART VISUALIZATION ========";
 input bool            InpShowGTChart       = true;              // Plot GT Mathematical Levels
 input int             InpLevelWidth        = 1;                 // Level Line Thickness
 input ENUM_LINE_STYLE InpLevelStyle        = STYLE_SOLID;       // Level Line Pattern
@@ -80,6 +93,13 @@ CTrade   trade;
 double   g_lastLot      = 0;  // Volume dari posisi terakhir yang ditutup
 int      g_lastDeal      = -1; // Ticket deal terakhir yang telah diproses
 bool     g_isFirstTrade = true; // Flag untuk perdagangan pertama
+
+// Multi-strategy state (shared with WriteGenesisJSON & trading logic)
+int                g_martingaleStep  = 0;
+ENUM_POSITION_TYPE g_lastDirection   = (ENUM_POSITION_TYPE)-1;
+string             g_lastSignalType  = "NETRAL";
+int                g_lastSignalScore = 0;
+string             g_activeStrategy  = "BREAKOUT";
 
 #define PREFIX          "GRAFIK TABRANIJ"
 #define COLOR_BG        C'45,45,45'    // Charcoal Grey (matching the image)
@@ -450,7 +470,7 @@ void CreateDashboardTab(int y)
    CreateQuadBarRow(PREFIX + "R_Awal",  y, "Awal");      y += ROW_H;
    CreateQuadBarRow(PREFIX + "R_OC",    y, "Neto");      y += ROW_H;
    CreateQuadBarRow(PREFIX + "R_LH",    y, "Inti");      y += ROW_H;
-   CreateQuadBarRow(PREFIX + "R_Range", y, "Jangkauan"); y += ROW_H + 5;
+   CreateQuadBarRow(PREFIX + "R_Range", y, "Julat"); y += ROW_H + 5;
 
    UpdateInfoSectionOnDashboard(y);
 }
@@ -516,8 +536,8 @@ void CreateAboutTab(int y)
    lineY += 50;
    CreateRect(PREFIX + "Ab_Box",    contentX, lineY, contentW, 100, gClrBg, clrSilver);
    CreateLabel(PREFIX + "Ab_Status",  contentX + 10, lineY + 10, "STATUS SISTEM: OPERASIONAL",                     gClrSuccess, 9);
-   CreateLabel(PREFIX + "Ab_Lince",   contentX + 10, lineY + 30, "License: RINGIN BAMBU Juli 2026",                clrSilver,   8);
-   CreateLabel(PREFIX + "Ab_Support", contentX + 10, lineY + 70, "Support: mql5.com/getbos | t.me/ringinbambu",   gClrAccent,  8);
+   CreateLabel(PREFIX + "Ab_Lince",   contentX + 10, lineY + 30, "License: KEBUN SALDO Agustus 2026",                clrSilver,   8);
+   CreateLabel(PREFIX + "Ab_Support", contentX + 10, lineY + 70, "Support: mql5.com/getbos | t.me/jackmusk",   gClrAccent,  8);
 }
 
 void CreateTradingTab(int y)
@@ -525,26 +545,40 @@ void CreateTradingTab(int y)
    CreateRect(PREFIX + "TradBg", X_Offset + 4, y, Panel_Width - 8, 340, gClrStripe);
    int lineY    = y + 20;
    int contentX = X_Offset + 20;
+
+   string stratLabel = "Trobosan Breakout";
+   if(InpStrategy == STRAT_LAYER)  stratLabel = "Layer / Grid";
+   else if(InpStrategy == STRAT_ZIGZAG) stratLabel = "Zigzag Bounce";
+   else if(InpStrategy == STRAT_SIGNAL) stratLabel = "Sinyal GT A-E";
    
    CreateLabel(PREFIX + "Tr_Title", contentX, lineY, "RINGKASAN PENGATURAN ALGORITMA", gClrAccent, 10);
-   lineY += 40;
+   lineY += 30;
    
+   CreateLabel(PREFIX + "Tr_ModeL",  contentX,       lineY, "Strategi:",     gClrLabel, 9);
+   CreateLabel(PREFIX + "Tr_ModeV",  contentX + 150, lineY, stratLabel,      gClrAccent, 9);
+   lineY += 22;
    CreateLabel(PREFIX + "Tr_StratL", contentX,       lineY, "Durasi GT:",    gClrLabel, 9);
    CreateLabel(PREFIX + "Tr_StratV", contentX + 150, lineY, EnumToString(InpGTTimeframe), gClrValue, 9);
-   lineY += 25;
+   lineY += 22;
    CreateLabel(PREFIX + "Tr_LotL",   contentX,       lineY, "Volume:",       gClrLabel, 9);
    CreateLabel(PREFIX + "Tr_LotV",   contentX + 150, lineY, DoubleToString(InpLot, 2), gClrValue, 9);
-   lineY += 25;
+   lineY += 22;
    CreateLabel(PREFIX + "Tr_StepL",  contentX,       lineY, "Martingale x:", gClrLabel, 9);
    CreateLabel(PREFIX + "Tr_StepV",  contentX + 150, lineY, DoubleToString(InpMultiplier,1) + "x / Max " + IntegerToString(InpMaxSteps), gClrValue, 9);
-   lineY += 25;
+   lineY += 22;
    CreateLabel(PREFIX + "Tr_TPL",    contentX,       lineY, "TP / SL:",      gClrLabel, 9);
    CreateLabel(PREFIX + "Tr_TPV",    contentX + 150, lineY, IntegerToString(InpTP) + " / " + IntegerToString(InpSL) + " pts", gClrValue, 9);
+   lineY += 22;
+   CreateLabel(PREFIX + "Tr_GTSL",   contentX,       lineY, "SL/TP dari GT:", gClrLabel, 9);
+   CreateLabel(PREFIX + "Tr_GTSLV",  contentX + 150, lineY, InpUseGTSLTP ? "YA" : "TIDAK", gClrValue, 9);
+   lineY += 22;
+   CreateLabel(PREFIX + "Tr_SigL",   contentX,       lineY, "Sinyal terakhir:", gClrLabel, 9);
+   CreateLabel(PREFIX + "Tr_SigV",   contentX + 150, lineY, g_lastSignalType + " (" + IntegerToString(g_lastSignalScore) + "/10)", gClrAccent, 9);
    
-   lineY += 50;
-   CreateLabel(PREFIX + "Tr_Note",  contentX, lineY,      "Catatan: Untuk mengubah nilai ini, silakan gunakan standar", clrSilver, 8);
+   lineY += 35;
+   CreateLabel(PREFIX + "Tr_Note",  contentX, lineY, "Ubah strategi via F7 → Inputs → InpStrategy", clrSilver, 8);
    lineY += 15;
-   CreateLabel(PREFIX + "Tr_Note2", contentX, lineY, "Expert Advisor Properties (F7 -> Inputs).", clrSilver, 8);
+   CreateLabel(PREFIX + "Tr_Note2", contentX, lineY, "Trobosan | Layer | Zigzag | Sinyal GT (A-E)", clrSilver, 8);
 }
 
 void CreateColorsTab(int y)
@@ -573,10 +607,10 @@ void CreateVisualTab(int y)
    int lineY   = y + 20;
    int centerX = X_Offset + Panel_Width/2;
    
-   CreateLabel(PREFIX + "Vs_Title", centerX, lineY, "PENGATURAN TAMPILAN GT", gClrAccent, 11, FONT_MAIN, ANCHOR_CENTER);
+   CreateLabel(PREFIX + "Vs_Title", centerX, lineY, "PENGATURAN TAMPILAN", gClrAccent, 11, FONT_MAIN, ANCHOR_CENTER);
    lineY += 60;
    
-   string toggleText = extShowGTChart ? "MENONAKTIFKAN LEVEL GT" : "MENGAKTIFKAN LEVEL GT";
+   string toggleText = extShowGTChart ? "MENONAKTIFKAN LEVEL" : "MENGAKTIFKAN LEVEL";
    color  toggleBg   = extShowGTChart ? gClrDanger : gClrSuccess;
    
    CreateButton(PREFIX + "TOG_CHART", centerX, lineY, 220, 40, toggleText, clrWhite, toggleBg);
@@ -698,7 +732,7 @@ void UpdateInfoSection()
       plColor = gClrSuccess;
       if(buyLots > 0 || sellLots > 0)
          plStr = (pointValueTotal > 0) ? StringFormat("▲ +%.2f (+%d pts)", symbolPL, (int)MathRound(ptsFloating))
-                                       : StringFormat("▲ +%.2f (Hedged)", symbolPL);
+                                       : StringFormat("▲ +%.2f (Terkunci)", symbolPL);
       else
          plStr = StringFormat("▲ +%.2f (0 pts)", symbolPL);
    }
@@ -707,7 +741,7 @@ void UpdateInfoSection()
       plColor = gClrDanger;
       if(buyLots > 0 || sellLots > 0)
          plStr = (pointValueTotal > 0) ? StringFormat("▼ %.2f (%d pts)", symbolPL, (int)MathRound(ptsFloating))
-                                       : StringFormat("▼ %.2f (Hedged)", symbolPL);
+                                       : StringFormat("▼ %.2f (Terkunci)", symbolPL);
       else
          plStr = StringFormat("▼ %.2f (0 pts)", symbolPL);
    }
@@ -761,8 +795,8 @@ void UpdateInfoSection()
          }
          else
          {
-            ptsToSOStr      = "Hedged";
-            stopOutPriceStr = "Hedged";
+            ptsToSOStr      = "Terkunci";
+            stopOutPriceStr = "Terkunci";
          }
       }
    }
@@ -882,8 +916,8 @@ void WriteGenesisJSON()
       }
       else
       {
-         pts_to_so = "Hedged";
-         so_price  = "Hedged";
+         pts_to_so = "Terkunci";
+         so_price  = "Terkunci";
       }
    }
 
@@ -910,7 +944,7 @@ void WriteGenesisJSON()
    json += "\"badan_bawah\":" + DoubleToString(bL0, myDigits) + ",";
    json += "\"neto\":"  + IntegerToString(oc0) + ",";
    json += "\"inti\":"  + DoubleToString(close0, myDigits) + ",";
-   json += "\"jangkauan\":" + IntegerToString(lh0) + ",";
+   json += "\"julat\":" + IntegerToString(lh0) + ",";
    json += "\"ch\":" + IntegerToString(ch0) + ",";
    json += "\"cl\":" + IntegerToString(cl0) + ",";
 
@@ -919,19 +953,19 @@ void WriteGenesisJSON()
    json += "\"open\":" + DoubleToString(open1,myDigits) + ",\"high\":" + DoubleToString(high1,myDigits);
    json += ",\"low\":" + DoubleToString(low1,myDigits) + ",\"close\":" + DoubleToString(close1,myDigits);
    json += ",\"neto\":" + IntegerToString((int)((close1-open1)/myPoint));
-   json += ",\"jangkauan\":" + IntegerToString((int)((high1-low1)/myPoint)) + "},";
+   json += ",\"julat\":" + IntegerToString((int)((high1-low1)/myPoint)) + "},";
 
    json += "\"gt2\":{";
    json += "\"open\":" + DoubleToString(open2,myDigits) + ",\"high\":" + DoubleToString(high2,myDigits);
    json += ",\"low\":" + DoubleToString(low2,myDigits) + ",\"close\":" + DoubleToString(close2,myDigits);
    json += ",\"neto\":" + IntegerToString((int)((close2-open2)/myPoint));
-   json += ",\"jangkauan\":" + IntegerToString((int)((high2-low2)/myPoint)) + "},";
+   json += ",\"julat\":" + IntegerToString((int)((high2-low2)/myPoint)) + "},";
 
    json += "\"gt3\":{";
    json += "\"open\":" + DoubleToString(open3,myDigits) + ",\"high\":" + DoubleToString(high3,myDigits);
    json += ",\"low\":" + DoubleToString(low3,myDigits) + ",\"close\":" + DoubleToString(close3,myDigits);
    json += ",\"neto\":" + IntegerToString((int)((close3-open3)/myPoint));
-   json += ",\"jangkauan\":" + IntegerToString((int)((high3-low3)/myPoint)) + "},";
+   json += ",\"julat\":" + IntegerToString((int)((high3-low3)/myPoint)) + "},";
 
    // === Akun & posisi ===
    json += "\"balance\":" + DoubleToString(balance, 2) + ",";
@@ -951,7 +985,17 @@ void WriteGenesisJSON()
    json += "\"so_price\":\"" + so_price + "\",";
    json += "\"eq_to_so\":\"" + eq_to_so + "\",";
    json += "\"pts_to_so\":\"" + pts_to_so + "\",";
-   json += "\"timeframe\":\"" + EnumToString(Period()) + "\"";
+   json += "\"timeframe\":\"" + EnumToString(Period()) + "\",";
+   // === Strategi & Sinyal EA ===
+   string stratName = "BREAKOUT";
+   if(InpStrategy == STRAT_LAYER)  stratName = "LAYER";
+   else if(InpStrategy == STRAT_ZIGZAG) stratName = "ZIGZAG";
+   else if(InpStrategy == STRAT_SIGNAL) stratName = "SIGNAL";
+   json += "\"strategy\":\"" + stratName + "\",";
+   json += "\"signal_type\":\"" + g_lastSignalType + "\",";
+   json += "\"signal_score\":" + IntegerToString(g_lastSignalScore) + ",";
+   json += "\"martingale_step\":" + IntegerToString(g_martingaleStep) + ",";
+   json += "\"positions\":" + IntegerToString(CountMyPositions());
    json += "}";
 
    // Tulis ke MQL5/Files/genesis_data.json (folder terminal)
@@ -1039,15 +1083,14 @@ void UpdateCountdown()
 }
 
 //+------------------------------------------------------------------+
-//| [9] EA Trading Logic - GT Breakout M5 + Instant Reverse Martingale
+//| [9] EA Trading Logic - Multi Strategy GT                         |
+//|  STRAT_BREAKOUT : Trobosan + Instant Reverse Martingale          |
+//|  STRAT_LAYER    : Layer / Grid averaging                         |
+//|  STRAT_ZIGZAG   : Zigzag Bouncing Martingale                     |
+//|  STRAT_SIGNAL   : Sinyal GT A-E + SL/TP dari level GT            |
 //+------------------------------------------------------------------+
 
-//--- State Variables untuk sistem baru
-int                g_martingaleStep    = 0;                         // Langkah Martingale saat ini
-ENUM_POSITION_TYPE g_lastDirection     = (ENUM_POSITION_TYPE)-1;   // Arah posisi terakhir
-bool               g_waitingForBreakout= true;                      // Flag untuk menunggu sinyal breakout
-
-//--- Helper: Count active EA positions on this symbol
+//--- Helpers
 int CountMyPositions()
 {
    int count = 0;
@@ -1055,135 +1098,389 @@ int CountMyPositions()
    {
       ulong ticket = PositionGetTicket(i);
       if(PositionSelectByTicket(ticket))
-         if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
             PositionGetInteger(POSITION_MAGIC) == (long)InpMagic)
             count++;
    }
    return count;
 }
 
-//--- Hitung Range dalam points
-int GetGT_RangePoints()
+double NormalizeLot(double lot)
 {
-   double high = iHigh(_Symbol, InpGTTimeframe, 1);
-   double low  = iLow (_Symbol, InpGTTimeframe, 1);
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(stepLot <= 0) stepLot = 0.01;
+   lot = MathMax(lot, minLot);
+   lot = MathMin(lot, maxLot);
+   lot = NormalizeDouble(MathRound(lot / stepLot) * stepLot, 2);
+   return lot;
+}
+
+double CalcNextLot()
+{
+   double nextLot = InpLot;
+   if(g_martingaleStep > 0)
+      nextLot = InpLot * MathPow(InpMultiplier, g_martingaleStep);
+   return NormalizeLot(nextLot);
+}
+
+int GetGT_RangePoints(int shift = 1)
+{
+   double high = iHigh(_Symbol, InpGTTimeframe, shift);
+   double low  = iLow (_Symbol, InpGTTimeframe, shift);
    if(high == 0 || low == 0) return 0;
    return (int)((high - low) / myPoint);
 }
 
-//--- Cek Breakout dari bar sebelumnya
+//--- Hitung SL/TP dari level GT atau fallback points
+void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
+{
+   double prevHigh = iHigh(_Symbol, InpGTTimeframe, 1);
+   double prevLow  = iLow (_Symbol, InpGTTimeframe, 1);
+   double liveHigh = iHigh(_Symbol, PERIOD_CURRENT, 0);
+   double liveLow  = iLow (_Symbol, PERIOD_CURRENT, 0);
+   int    rangePts = GetGT_RangePoints(1);
+   if(rangePts <= 0) rangePts = InpTP;
+
+   if(InpUseGTSLTP && prevHigh > 0 && prevLow > 0)
+   {
+      if(type == POSITION_TYPE_BUY)
+      {
+         sl = NormalizeDouble(MathMin(prevLow, liveLow) - 5 * myPoint, myDigits);
+         tp = NormalizeDouble(entry + MathMax(rangePts, InpTP) * myPoint, myDigits);
+      }
+      else
+      {
+         sl = NormalizeDouble(MathMax(prevHigh, liveHigh) + 5 * myPoint, myDigits);
+         tp = NormalizeDouble(entry - MathMax(rangePts, InpTP) * myPoint, myDigits);
+      }
+   }
+   else
+   {
+      if(type == POSITION_TYPE_BUY)
+      {
+         sl = NormalizeDouble(entry - InpSL * myPoint, myDigits);
+         tp = NormalizeDouble(entry + InpTP * myPoint, myDigits);
+      }
+      else
+      {
+         sl = NormalizeDouble(entry + InpSL * myPoint, myDigits);
+         tp = NormalizeDouble(entry - InpTP * myPoint, myDigits);
+      }
+   }
+}
+
+bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
+{
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double price = (type == POSITION_TYPE_BUY) ? ask : bid;
+   double sl = 0, tp = 0;
+   CalcGTSLTP(type, price, sl, tp);
+
+   bool ok = false;
+   if(type == POSITION_TYPE_BUY)
+      ok = trade.Buy(lot, _Symbol, price, sl, tp, comment);
+   else
+      ok = trade.Sell(lot, _Symbol, price, sl, tp, comment);
+
+   if(ok)
+   {
+      g_lastDirection = type;
+      Print("GT [", g_activeStrategy, "] ", (type == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+            " | Lot:", DoubleToString(lot, 2),
+            " | SL:", DoubleToString(sl, myDigits),
+            " | TP:", DoubleToString(tp, myDigits),
+            " | ", comment);
+   }
+   else
+      Print("GT Order gagal: ", trade.ResultRetcodeDescription());
+   return ok;
+}
+
+//--- Engine Sinyal GT A-E (mirror bot signal_engine)
+// Return: 1=BUY, -1=SELL, 0=NETRAL; score 0-10
+int EvaluateGTSignal(int &score, string &label)
+{
+   score = 5;
+   label = "NETRAL";
+
+   double open0  = iOpen (_Symbol, PERIOD_CURRENT, 0);
+   double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+   double high0  = iHigh (_Symbol, PERIOD_CURRENT, 0);
+   double low0   = iLow  (_Symbol, PERIOD_CURRENT, 0);
+   if(open0 == 0) return 0;
+
+   int neto0  = (int)((close0 - open0) / myPoint);
+   int julat0 = (int)((high0  - low0)  / myPoint);
+   double bH0 = MathMax(open0, close0), bL0 = MathMin(open0, close0);
+   int atas0  = (int)((high0 - bH0) / myPoint);
+   int bawah0 = (int)((bL0 - low0) / myPoint);
+
+   int neto1 = 0, julat1 = 0, neto2 = 0, julat2 = 0, neto3 = 0, julat3 = 0;
+   double high1=0, low1=0, high2=0, low2=0;
+   for(int s = 1; s <= 3; s++)
+   {
+      double o = iOpen(_Symbol, PERIOD_CURRENT, s);
+      double c = iClose(_Symbol, PERIOD_CURRENT, s);
+      double h = iHigh(_Symbol, PERIOD_CURRENT, s);
+      double l = iLow(_Symbol, PERIOD_CURRENT, s);
+      if(o == 0) continue;
+      int n = (int)((c - o) / myPoint);
+      int j = (int)((h - l) / myPoint);
+      if(s == 1) { neto1 = n; julat1 = j; high1 = h; low1 = l; }
+      if(s == 2) { neto2 = n; julat2 = j; high2 = h; low2 = l; }
+      if(s == 3) { neto3 = n; julat3 = j; }
+   }
+
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double jarakHigh = high0 - price;
+   double jarakLow  = price - low0;
+   int totalWick = atas0 + bawah0; if(totalWick <= 0) totalWick = 1;
+   double imbalance = (double)(atas0 - bawah0) / totalWick;
+
+   // Sinyal A – Momentum Kuat
+   if(MathAbs(neto0) >= 8 && MathAbs(neto1) >= 6 && (julat1 == 0 || julat0 > julat1 * 1.15))
+   {
+      if(neto0 > 0 && neto1 > 0)
+      { label = "A_MOMENTUM_BUY"; score = 8 + MathMin(2, neto0 / 5); return 1; }
+      if(neto0 < 0 && neto1 < 0)
+      { label = "A_MOMENTUM_SELL"; score = 8 + MathMin(2, MathAbs(neto0) / 5); return -1; }
+   }
+
+   // Sinyal B – Pullback
+   if(neto2 * neto3 > 0 && MathAbs(neto2) >= 5)
+   {
+      if(neto2 > 0 && neto0 <= 3 && jarakLow < 15 * myPoint)
+      { label = "B_PULLBACK_BUY"; score = 7; return 1; }
+      if(neto2 < 0 && neto0 >= -3 && jarakHigh < 15 * myPoint)
+      { label = "B_PULLBACK_SELL"; score = 7; return -1; }
+   }
+
+   // Sinyal C – Range
+   if((julat1 > 0 && julat1 < 28) && (julat2 == 0 || julat2 < 30) && (julat3 == 0 || julat3 < 32))
+   {
+      if(jarakLow < 12 * myPoint)
+      { label = "C_RANGE_BUY"; score = 6; return 1; }
+      if(jarakHigh < 12 * myPoint)
+      { label = "C_RANGE_SELL"; score = 6; return -1; }
+   }
+
+   // Sinyal D – Imbalance
+   if(MathAbs(imbalance) > 0.45 && MathAbs(neto0) >= 4)
+   {
+      if(imbalance > 0.45 && neto0 < 0)
+      { label = "D_PRESSURE_SELL"; score = 7; return -1; }
+      if(imbalance < -0.45 && neto0 > 0)
+      { label = "D_PRESSURE_BUY"; score = 7; return 1; }
+   }
+
+   // Sinyal E – Konvergensi 4 bar
+   if((neto3 > 0 && neto2 > 0 && neto1 > 0 && neto0 > 0) ||
+      (neto3 < 0 && neto2 < 0 && neto1 < 0 && neto0 < 0))
+   {
+      if(neto0 > 0) { label = "E_KONVERGENSI_BUY"; score = 9; return 1; }
+      else          { label = "E_KONVERGENSI_SELL"; score = 9; return -1; }
+   }
+
+   // Dasar – Neto kuat
+   if(MathAbs(neto0) >= 10)
+   {
+      if(neto0 > 0) { label = "DASAR_BUY"; score = 6; return 1; }
+      else          { label = "DASAR_SELL"; score = 6; return -1; }
+   }
+
+   return 0;
+}
+
+//==================== STRATEGY 1: TROBOSAN BREAKOUT ====================
 bool CheckBreakout(ENUM_POSITION_TYPE &signalType)
 {
-   double prevHigh    = iHigh(_Symbol, InpGTTimeframe, 1);
-   double prevLow     = iLow (_Symbol, InpGTTimeframe, 1);
-   double currentPrice= SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   
+   double prevHigh = iHigh(_Symbol, InpGTTimeframe, 1);
+   double prevLow  = iLow (_Symbol, InpGTTimeframe, 1);
+   double price    = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(prevHigh == 0 || prevLow == 0) return false;
-
-   if(currentPrice > prevHigh) { signalType = POSITION_TYPE_BUY;  return true; }
-   if(currentPrice < prevLow)  { signalType = POSITION_TYPE_SELL; return true; }
+   if(price > prevHigh) { signalType = POSITION_TYPE_BUY;  return true; }
+   if(price < prevLow)  { signalType = POSITION_TYPE_SELL; return true; }
    return false;
 }
 
-//--- Tempatkan order dengan SL & TP berdasarkan Range
-bool PlaceBreakoutOrder(ENUM_POSITION_TYPE type, double lot)
+void LogicBreakout()
 {
-   double ask        = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double bid        = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double prevHigh   = iHigh(_Symbol, InpGTTimeframe, 1);
-   double prevLow    = iLow (_Symbol, InpGTTimeframe, 1);
-   int    rangePoints= GetGT_RangePoints();
-   
-   if(rangePoints <= 0) return false;
-
-   double price, sl, tp;
-   bool   result = false;
-
-   if(type == POSITION_TYPE_BUY)
-   {
-      price  = ask;
-      sl     = NormalizeDouble(prevLow,  myDigits);
-      tp     = NormalizeDouble(price + rangePoints * myPoint, myDigits);
-      result = trade.Buy(lot, _Symbol, price, sl, tp, "GT Breakout BUY");
-   }
-   else
-   {
-      price  = bid;
-      sl     = NormalizeDouble(prevHigh, myDigits);
-      tp     = NormalizeDouble(price - rangePoints * myPoint, myDigits);
-      result = trade.Sell(lot, _Symbol, price, sl, tp, "GT Breakout SELL");
-   }
-
-   if(result)
-      Print("GT Breakout: ", (type == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-            " | Lot: ", DoubleToString(lot, 2), " | Range: ", rangePoints, " pts");
-   else
-      Print("GT Breakout: Order gagal - ", trade.ResultRetcodeDescription());
-   
-   return result;
-}
-
-//--- Fungsi utama trading logic baru
-void ExecuteTradingLogic()
-{
+   g_activeStrategy = "BREAKOUT";
    if(CountMyPositions() > 0) return;
 
-   ENUM_POSITION_TYPE signalType;
-   
-   if(CheckBreakout(signalType))
+   if(InpRequireSignal)
    {
-      double nextLot = InpLot;
-      
-      if(g_martingaleStep > 0)
-         nextLot = NormalizeDouble(InpLot * MathPow(InpMultiplier, g_martingaleStep), 2);
-      
-      double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-      double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      nextLot = MathMax(nextLot, minLot);
-      nextLot = NormalizeDouble(MathRound(nextLot / stepLot) * stepLot, 2);
-      
-      if(PlaceBreakoutOrder(signalType, nextLot))
-         g_lastDirection = signalType;
+      int sc; string lb;
+      int dir = EvaluateGTSignal(sc, lb);
+      g_lastSignalType = lb; g_lastSignalScore = sc;
+      if(dir == 0) return;
+   }
+
+   ENUM_POSITION_TYPE sig;
+   if(CheckBreakout(sig))
+      OpenPosition(sig, CalcNextLot(), "GT Trobosan " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+}
+
+//==================== STRATEGY 2: LAYER / GRID ====================
+void LogicLayer()
+{
+   g_activeStrategy = "LAYER";
+   int posCount = CountMyPositions();
+   if(posCount >= InpMaxSteps) return;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // Tentukan arah dari sinyal GT atau neto live
+   int sc; string lb;
+   int dir = EvaluateGTSignal(sc, lb);
+   g_lastSignalType = lb; g_lastSignalScore = sc;
+
+   ENUM_POSITION_TYPE prefer = POSITION_TYPE_BUY;
+   if(dir < 0) prefer = POSITION_TYPE_SELL;
+   else if(dir == 0)
+   {
+      double open0 = iOpen(_Symbol, PERIOD_CURRENT, 0);
+      double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+      if(close0 < open0) prefer = POSITION_TYPE_SELL;
+   }
+
+   // Cari harga rata-rata posisi existing
+   double avgPrice = 0, totalLots = 0;
+   ENUM_POSITION_TYPE existingType = (ENUM_POSITION_TYPE)-1;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)InpMagic) continue;
+      double lots = PositionGetDouble(POSITION_VOLUME);
+      double px   = PositionGetDouble(POSITION_PRICE_OPEN);
+      avgPrice += px * lots;
+      totalLots += lots;
+      existingType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   }
+
+   if(totalLots > 0)
+   {
+      avgPrice /= totalLots;
+      prefer = existingType; // lanjut layer searah
+      double distPts = MathAbs((prefer == POSITION_TYPE_BUY ? bid : ask) - avgPrice) / myPoint;
+      if(distPts < InpLayerStepPts) return; // belum cukup jauh untuk layer baru
+   }
+
+   double lot = NormalizeLot(InpLot * MathPow(InpMultiplier, posCount));
+   OpenPosition(prefer, lot, StringFormat("GT Layer #%d", posCount + 1));
+}
+
+//==================== STRATEGY 3: ZIGZAG BOUNCING ====================
+void LogicZigzag()
+{
+   g_activeStrategy = "ZIGZAG";
+   if(CountMyPositions() > 0) return;
+
+   double bid  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double high = iHigh(_Symbol, InpGTTimeframe, 1);
+   double low  = iLow (_Symbol, InpGTTimeframe, 1);
+   double open0 = iOpen(_Symbol, PERIOD_CURRENT, 0);
+   double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+   if(high == 0 || low == 0) return;
+
+   int bounce = InpZigzagBouncePts;
+   // Bounce dari rendah → BUY ; bounce dari tinggi → SELL
+   bool nearLow  = (bid - low)  <= bounce * myPoint;
+   bool nearHigh = (high - bid) <= bounce * myPoint;
+
+   // Konfirmasi reversal kecil (neto berlawanan arah ekstrem)
+   int neto = (int)((close0 - open0) / myPoint);
+
+   ENUM_POSITION_TYPE sig = (ENUM_POSITION_TYPE)-1;
+   if(nearLow && neto >= -3)  // dekat low & tidak bearish keras
+      sig = POSITION_TYPE_BUY;
+   else if(nearHigh && neto <= 3)
+      sig = POSITION_TYPE_SELL;
+
+   if(sig == (ENUM_POSITION_TYPE)-1) return;
+
+   if(InpRequireSignal)
+   {
+      int sc; string lb;
+      int dir = EvaluateGTSignal(sc, lb);
+      g_lastSignalType = lb; g_lastSignalScore = sc;
+      if(dir == 0) return;
+      if(dir > 0 && sig != POSITION_TYPE_BUY) return;
+      if(dir < 0 && sig != POSITION_TYPE_SELL) return;
+   }
+
+   OpenPosition(sig, CalcNextLot(), "GT Zigzag " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+}
+
+//==================== STRATEGY 4: SINYAL GT A-E ====================
+void LogicSignal()
+{
+   g_activeStrategy = "SIGNAL";
+   if(CountMyPositions() > 0) return;
+
+   int sc; string lb;
+   int dir = EvaluateGTSignal(sc, lb);
+   g_lastSignalType = lb;
+   g_lastSignalScore = sc;
+
+   if(dir == 0 || sc < 6) return; // minimal skor 6
+
+   ENUM_POSITION_TYPE sig = (dir > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   OpenPosition(sig, CalcNextLot(), "GT Sinyal " + lb);
+}
+
+//--- Dispatcher utama
+void ExecuteTradingLogic()
+{
+   switch(InpStrategy)
+   {
+      case STRAT_LAYER:    LogicLayer();    break;
+      case STRAT_ZIGZAG:   LogicZigzag();   break;
+      case STRAT_SIGNAL:   LogicSignal();   break;
+      case STRAT_BREAKOUT:
+      default:             LogicBreakout(); break;
    }
 }
 
-//--- Fungsi untuk mendeteksi hasil posisi yang baru ditutup
+//--- OnTradeTransaction: martingale step
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest     &request,
                         const MqlTradeResult      &result)
 {
-   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   ulong dealTicket = trans.deal;
+   if(!HistoryDealSelect(dealTicket)) return;
+   if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagic) return;
+   if(HistoryDealGetString (dealTicket, DEAL_SYMBOL) != _Symbol) return;
+
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) return;
+
+   double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) +
+                   HistoryDealGetDouble(dealTicket, DEAL_SWAP) +
+                   HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+
+   if(profit > 0)
    {
-      ulong dealTicket = trans.deal;
-      if(HistoryDealSelect(dealTicket))
+      g_martingaleStep = 0;
+      Print("GT: Profit. Martingale/Layer reset ke 0.");
+   }
+   else if(profit < 0)
+   {
+      g_martingaleStep++;
+      if(g_martingaleStep >= InpMaxSteps)
       {
-         if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagic) return;
-         if(HistoryDealGetString (dealTicket, DEAL_SYMBOL)!= _Symbol)  return;
-         
-         ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-         if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) return;
-         
-         double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + 
-                         HistoryDealGetDouble(dealTicket, DEAL_SWAP)   + 
-                         HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
-         
-         if(profit > 0)
-         {
-            g_martingaleStep = 0;
-            Print("GT: Profit terdeteksi. Martingale direset ke 0.");
-         }
-         else if(profit < 0)
-         {
-            g_martingaleStep++;
-            if(g_martingaleStep >= InpMaxSteps)
-            {
-               Print("GT: Max Martingale step tercapai (", InpMaxSteps, "). Reset ke 0.");
-               g_martingaleStep = 0;
-            }
-            else
-               Print("GT: Loss terdeteksi. Martingale naik ke step ", g_martingaleStep);
-         }
+         Print("GT: Max step tercapai (", InpMaxSteps, "). Reset.");
+         g_martingaleStep = 0;
       }
+      else
+         Print("GT: Loss. Step naik ke ", g_martingaleStep);
    }
 }
 
@@ -1198,7 +1495,7 @@ void CloseAllPositions(bool pos, bool pend)
       {
          ulong ticket = PositionGetTicket(i);
          if(PositionSelectByTicket(ticket))
-            if(PositionGetString(POSITION_SYMBOL) == _Symbol && 
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
                PositionGetInteger(POSITION_MAGIC) == (long)InpMagic)
                trade.PositionClose(ticket);
       }
@@ -1209,7 +1506,7 @@ void CloseAllPositions(bool pos, bool pend)
       {
          ulong ticket = OrderGetTicket(i);
          if(OrderSelect(ticket))
-            if(OrderGetString(ORDER_SYMBOL) == _Symbol && 
+            if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
                OrderGetInteger(ORDER_MAGIC) == (long)InpMagic)
                trade.OrderDelete(ticket);
       }
