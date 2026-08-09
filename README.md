@@ -2,7 +2,7 @@
 
 **Representasi Visual Dinamis untuk Analisis Pergerakan Harga**
 
-Hai! 👋
+Hai! 👋 Para Pemburu dan pengepul saldo dolar dimana kalian berada
 
 **Apakah Anda tahu kepanjangan dari "GRAFIK TABRANIJ"?**
 
@@ -20,14 +20,14 @@ Hai! 👋
 
 | Komponen         | Representasi Matematis    | Keterangan                          |
 |------------------|---------------------------|-------------------------------------|
-| 1. **T**inggi    | Batas                     | Harga tertinggi                     |
-| 2. **A**tas      | Kodomain                  | Riwayat pergerakan atas             |
-| 3. **B**awah     | Kodomain                  | Riwayat pergerakan bawah            |
-| 4. **R**endah    | Batas                     | Harga terendah                      |
-| 5. **A**wal      | Konstanta                 | Harga pembukaan / harga awal        |
-| 6. **N**eto      | Domain                    | Area pergerakan efektif             |
-| 7. **I**nti      | Variabel                  | Harga sekarang / harga penutupan    |
-| 8. **J**ulat     | Jangkauan                 | Jangkauan keseluruhan pergerakan    |
+| 1. **T**inggi    | Batas Atas                | Harga tertinggi                     |
+| 2. **A**tas      | Kodomain Atas             | Riwayat pergerakan atas             |
+| 3. **B**awah     | Kodomain Bawah            | Riwayat pergerakan bawah            |
+| 4. **R**endah    | Batas Rendah              | Harga terendah                      |
+| 5. **A**wal      | Konstanta Awal            | Harga pembukaan / harga awal        |
+| 6. **N**eto      | Domain Tengah             | Area pergerakan efektif             |
+| 7. **I**nti      | Variabel Saat Ini         | Harga sekarang / harga penutupan    |
+| 8. **J**ulat     | Jarak Tinggi Rendah       | Jangkauan keseluruhan pergerakan    |
 
 ---
 
@@ -35,15 +35,15 @@ Hai! 👋
 
 **Grafik Tabranij** adalah sebuah kerangka analisis visual yang menyajikan **riwayat dan dinamika pergerakan harga** secara lengkap dan terstruktur.
 
-Ia menggabungkan delapan elemen utama harga (High, Low, Open, Range, Upper/Lower Bound, Net Movement, dll) ke dalam satu representasi yang mudah dibaca, sehingga pesaldo dapat dengan cepat memahami:
+Ia menggabungkan delapan elemen utama harga (High, Low, Open, Range, Upper/Lower Bound, Net Movement, dll) ke dalam satu representasi yang mudah dibaca, sehingga pemburu dan pengepul saldo di MT5 dan TradingView dapat dengan cepat memahami:
 
-- Kekuatan tren
-- Potensi reversal
-- Area supply & demand
+- Kekuatan arus dan tren
+- Potensi pembalikan arah arus
+- Area Mahal dan Murah
 - Volatilitas dan jangkauan pergerakan
 - Genesis (asal-usul) pergerakan harga
 
-Dengan memahami kedelapan elemen ini, trader dapat melihat:
+Dengan memahami kedelapan elemen ini, pemburu dan pengumpul saldo dapat melihat:
 - Genesis pergerakan (asal mula)
 - Kekuatan neto
 - Inti dari pergerakan harga
@@ -55,10 +55,10 @@ Dengan memahami kedelapan elemen ini, trader dapat melihat:
 - **Cocok untuk MetaTrader 5 (MT5)** — dapat diimplementasikan sebagai Custom Indicator
 - Membantu identifikasi Pengaturan Probabilitas Tinggi
 - Memberikan gambaran yang lebih kaya daripada bartchart/candlestick biasa
-- Berguna untuk **Day Trading, Swing Trading, dan Scalping**
+- Berguna untuk para **Day Trading, Swing Trading, dan Scalping**
 - Dapat dikombinasikan dengan indikator teknikal lain (MA, RSI, Volume, dll)
 
-### Keunggulan dalam Pesaldo
+### Keunggulan dan manfaat yang didapat oleh pemburu dan pengepul saldo
 
 - Sangat sesuai untuk **MetaTrader 5 (MT5)** sebagai custom indicator
 - Membantu deteksi dini perubahan momentum
@@ -70,11 +70,11 @@ Dengan memahami kedelapan elemen ini, trader dapat melihat:
 
 ### Filosofi Singkat
 
-> "Memahami harga bukan hanya melihat barchart/candlestick, tapi memahami **jiwa** pergerakannya — dari Genesis hingga Jangkauannya."
+> "Memahami harga bukan hanya melihat GT, barchart/candlestick, tapi memahami **jiwa** pergerakannya — dari Genesis hingga Julatnya."
 
 ---
 
-**Siap digunakan untuk pengembangan indikator MT5, backtesting, dan strategi trading yang lebih dalam.**
+**Siap digunakan untuk pengembangan indikator MT5, backtesting, dan strategi pemburu yang lebih dalam.**
 
 ---
 
