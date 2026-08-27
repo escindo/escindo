@@ -2,14 +2,17 @@
 //|                                              Grafik Tabranij.mq5 |
 //|                          Membaca, Menulis & Memburu Saldo di MT5 |
 //|                                          https://cindo.pages.dev |
+//|  v1.12  →  + Strategi A* (Graf Level Harga + Pathfinding)        |
 //+------------------------------------------------------------------+
 #property copyright   "MOCHAMAD TABRANI (c) 2026"
 #property link        "https://cindo.pages.dev"
-#property version     "1.10"
+#property version     "1.12"
 #property description "EA Memburu Saldo di Mt5 - Multi Strategy Komando Profit & Keamanan"
 #property description "================================="
-#property description "Strategi: Trobosan | Layer | Zigzag | Sinyal GT (A-E)"
-#property description "Didesain spesifik untuk volatilitas tinggi (BTCUSD, XAUUSD, GOLDmicro)."
+#property description "Strategi: Trobosan | Layer | Zigzag | Sinyal GT (A-E) | A* Pathfinding"
+#property description "v1.12: +A* Optimal Path antar Level Harga (Swing Points)"
+#property description "v1.11: +Pengaman DD Equity, Loss Harian, Max Spread, Cooldown,"
+#property description "      +Kalibrasi Sinyal ATR, Throttle I/O, Tombol Close All."
 
 //+------------------------------------------------------------------+
 //| Include                                                          |
@@ -32,17 +35,32 @@ enum ENUM_STRATEGY
     STRAT_BREAKOUT = 0,  // Trobosan Breakout Martingale
     STRAT_LAYER    = 1,  // Layer / Grid Averaging
     STRAT_ZIGZAG   = 2,  // Zigzag Bouncing Martingale
-    STRAT_SIGNAL   = 3   // Sinyal GT A-E + SL/TP dari level GT
+    STRAT_SIGNAL   = 3,  // Sinyal GT A-E + SL/TP dari level GT
+    STRAT_ASTAR    = 4   // A* Optimal Path antar Level Harga (BARU)
 };
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                 |
 //+------------------------------------------------------------------+
 
+//+------------------------------------------------------------------+
+//| Struct untuk A*                                                  |
+//+------------------------------------------------------------------+
+struct AStarNode
+{
+   double price;
+   int    barIndex;
+   double g;
+   double h;
+   double f;
+   int    parentIndex;
+   bool   isHigh;
+};
+
 //--- System Information
 input string          _s0                  = "=========== EA PESALDO ==========="; 
 sinput string         Info_System          = "EA Memburu Saldo "; 
-sinput string         Info_Version         = "v1.10 [Multi-Strategy GT]"; 
+sinput string         Info_Version         = "v1.12 [Multi-Strategy GT + A*]"; 
 sinput string         Info_Author          = "MOCHAMAD TABRANI";                  
 sinput string         Info_Support         = "cindo.pages.dev";   
 
@@ -67,6 +85,47 @@ input bool            InpUseGTSLTP         = true;          // Pakai level GT un
 input bool            InpRequireSignal     = false;         // Hanya entry jika sinyal A-E aktif
 input int             InpMagic             = 888999;        // Algorithm Serial ID
 
+//--- [v1.12] A* Settings
+input string          _s2a                 = "======== A* (AStar) ========";
+input int             InpAStarLookback     = 80;     // Jumlah bar untuk deteksi swing
+input int             InpAStarSwingLook    = 3;      // Lookback kiri-kanan untuk swing
+input double          InpAStarMinScore     = 6.0;    // Minimal skor jalur untuk entry
+input bool            InpAStarVisual       = true;   // Gambar jalur A* di chart
+
+//--- [v1.11] Keamanan & Optimasi
+input string          _s3                  = "======== KEAMANAN & OPTIMASI (v1.11) ========";
+input int             InpMaxSpreadPts      = 40;            // Max Spread (pts) utk entry baru (0=off)
+input double          InpMaxEquityDDPct    = 25.0;          // Stop entry jika DD Equity > % (0=off)
+input double          InpMaxDailyLossPct   = 10.0;          // Stop entry jika Loss Harian > % (0=off)
+input double          InpMaxLotCap         = 5.0;           // Batas Lot Maksimum per posisi
+input int             InpMinSecBetweenTrades = 5;           // Cooldown antar entry (detik, 0=off)
+input bool            InpOncePerBar        = true;          // Maks 1 entry baru per bar
+input bool            InpStopOnMaxStep     = true;          // Hentikan entry saat step maksimal
+
+//--- [v1.11] Kalibrasi Sinyal GT A-E
+input string          _s4                  = "======== KALIBRASI SINYAL GT A-E (v1.11) ========";
+input bool            InpUseATRScale       = true;          // Skala threshold dgn ATR simbol
+input int             InpATRPeriod         = 14;            // Periode ATR
+input double          InpATRFactor         = 1.0;           // Faktor ATR (1.0 = 1x ATR)
+input int             InpSigMomPts         = 8;             // Sinyal A: neto minimal (pts)
+input int             InpSigPullbackPts    = 15;            // Sinyal B: jarak wick (pts)
+input int             InpSigRangePts       = 28;            // Sinyal C: julat range maks (pts)
+input int             InpSigBasePts        = 10;            // Sinyal Dasar: neto minimal (pts)
+
+//--- [v1.12] Kalibrasi Sinyal GT GENESIS (panel sinyal faktual)
+input string          _s4b                 = "======== KALIBRASI SINYAL GT GENESIS ========";
+input double          InpBodyKuatRatio     = 0.70;    // Neto: rasio body utk sinyal KUAT
+input double          InpBodyModeratRatio  = 0.40;    // Neto: rasio body utk MODERAT
+input double          InpWickMaxRatio      = 0.50;    // Atas/Bawah: rasio sumbu utk KUAT
+input double          InpCloseKuatRatio    = 0.70;    // Inti: posisi close utk KUAT
+input double          InpCloseModeratRatio = 0.55;    // Inti: posisi close utk MODERAT
+input double          InpCloseSellModerat  = 0.30;    // Inti: posisi close utk SELL MODERAT
+input int             InpJulatAvgBars      = 10;      // Julat: periode rata-rata
+input double          InpJulatKuatRatio    = 1.30;    // Julat: rasio utk KUAT
+input double          InpJulatKompresiRatio= 0.70;    // Julat: rasio kompresi
+input int             InpRecoBuyLevel      = 6;       // Rekomendasi: min skor BUY KUAT
+input int             InpRecoSellLevel     = -6;      // Rekomendasi: maks skor SELL KUAT
+
 //--- Theme & Color Settings
 input string          _s5                  = "======== UI THEME & PALETTE ========";
 input ENUM_THEME      InpTheme             = THEME_ONYX_GOLD;   // Active Visual Theme
@@ -90,8 +149,6 @@ datetime lastBarTime = 0;
 CTrade   trade;
 
 // Sequential State Machine
-double   g_lastLot      = 0;  // Volume dari posisi terakhir yang ditutup
-int      g_lastDeal      = -1; // Ticket deal terakhir yang telah diproses
 bool     g_isFirstTrade = true; // Flag untuk perdagangan pertama
 
 // Multi-strategy state (shared with WriteGenesisJSON & trading logic)
@@ -100,6 +157,27 @@ ENUM_POSITION_TYPE g_lastDirection   = (ENUM_POSITION_TYPE)-1;
 string             g_lastSignalType  = "NETRAL";
 int                g_lastSignalScore = 0;
 string             g_activeStrategy  = "BREAKOUT";
+
+// [v1.11] Pengaman & throttle
+datetime           g_lastEntryTime   = 0;     // Cooldown antar entry
+datetime           g_lastEntryBar    = 0;     // Bar terakhir entry (once per bar)
+double             g_peakEquity      = 0;     // Equity puncak sejak EA start
+int                g_dayKey          = 0;     // Kunci hari server (YYYYMMDD)
+double             g_dayStartEquity  = 0;
+double             g_dayPeakEquity   = 0;
+uint               g_lastJsonMs      = 0;     // Throttle JSON (ms)
+uint               g_lastGuiMs       = 0;     // Throttle GUI (ms)
+uint               g_lastLevelsMs    = 0;     // Throttle level (ms)
+int                g_atrHandle       = INVALID_HANDLE; // Handle ATR utk kalibrasi sinyal
+
+// [v1.12] Status A* untuk panel dashboard
+string             g_astarStatus     = "N/A";
+double             g_astarScore      = 0;
+int                g_astarNodeCount  = 0;
+double             g_astarStartPrice = 0;
+double             g_astarGoalPrice  = 0;
+string             g_astarDirection  = "-";
+datetime           g_astarLastBar    = 0;
 
 #define PREFIX          "GRAFIK TABRANIJ"
 #define COLOR_BG        C'45,45,45'    // Charcoal Grey (matching the image)
@@ -115,6 +193,7 @@ string             g_activeStrategy  = "BREAKOUT";
 #define FONT_SIZE       10
 #define COLOR_COUNTDOWN C'255,200,50'   // Amber Gold (Countdown)
 #define VIS_PREFIX      "GT_VIS_"
+#define ASTAR_PREFIX    "ASTAR_"
 
 // Global State for UI Tabs
 enum ENUM_TABS {
@@ -229,6 +308,12 @@ void OnDeinit(const int reason)
    EventKillTimer(); 
    DeleteAllObjects(); 
    DeleteVisualization(); 
+   DeleteAStarVisual();
+   if(g_atrHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_atrHandle);
+      g_atrHandle = INVALID_HANDLE;
+   }
    
    if(reason == REASON_REMOVE || reason == REASON_CLOSE)
    {
@@ -241,10 +326,31 @@ void OnDeinit(const int reason)
 
 void OnTick()                    
 { 
-   UpdateGUILabels(); 
-   ExecuteTradingLogic();
-   if(extShowGTChart) DrawGTLevels();
-   WriteGenesisJSON();   // kirim data ke TanyaHargaBot
+   uint nowMs = GetTickCount();
+   
+   // GUI update (throttle ~100 ms agar ringan di simbol cepat)
+   if(nowMs - g_lastGuiMs >= 100)
+   {
+      UpdateGUILabels(); 
+      g_lastGuiMs = nowMs;
+   }
+   
+   UpdateSafetyTrackers();       // update equity puncak & loss harian
+   ExecuteTradingLogic();        // entry baru di-filter oleh IsTradingAllowed()
+   
+   // Level visualization (throttle ~1 dtk)
+   if(extShowGTChart && nowMs - g_lastLevelsMs >= 1000)
+   {
+      DrawGTLevels(); 
+      g_lastLevelsMs = nowMs;
+   }
+   
+   // JSON ke TanyaHargaBot (throttle ~1 dtk, hindari I/O tiap tick)
+   if(nowMs - g_lastJsonMs >= 1000)
+   {
+      WriteGenesisJSON(); 
+      g_lastJsonMs = nowMs;
+   }
 }
 
 void OnTimer() { UpdateCountdown(); }
@@ -289,18 +395,81 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          if(!extShowGTChart) DeleteVisualization(); 
          ResetDashboard(); 
       }
+      else if(sparam == PREFIX + "BTN_CLOSEALL")  // [v1.11] Tombol darurat
+      { 
+         CloseMyPositions(); 
+      }
    }
 }
 
-bool IsNewBar()
+//+------------------------------------------------------------------+
+//| [v1.11] Fungsi Keamanan                                          |
+//+------------------------------------------------------------------+
+
+// Update tracker equity puncak & loss harian (panggil tiap tick)
+void UpdateSafetyTrackers()
 {
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(currentBarTime != lastBarTime)
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity > g_peakEquity) g_peakEquity = equity;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   int key = dt.year * 10000 + dt.mon * 100 + dt.day;
+   if(key != g_dayKey)
    {
-      lastBarTime = currentBarTime;
-      return true;
+      g_dayKey          = key;
+      g_dayStartEquity  = equity;
+      g_dayPeakEquity   = equity;
    }
-   return false;
+   else if(equity > g_dayPeakEquity)
+      g_dayPeakEquity = equity;
+}
+
+double GetEquityDDPct()
+{
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(g_peakEquity > 0) return (g_peakEquity - eq) / g_peakEquity * 100.0;
+   return 0;
+}
+
+// Gerbang keamanan utama — SEMUA entry baru harus lolos fungsi ini
+bool IsTradingAllowed()
+{
+   // 1) Spread filter (hindari entry saat news/spread melebar)
+   if(InpMaxSpreadPts > 0)
+   {
+      long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+      if(spread > InpMaxSpreadPts) return false;
+   }
+   // 2) Cooldown antar entry
+   if(InpMinSecBetweenTrades > 0 && TimeCurrent() - g_lastEntryTime < InpMinSecBetweenTrades)
+      return false;
+   // 3) Maks 1 entry baru per bar (cegah re-entry berulang breakout)
+   if(InpOncePerBar && g_lastEntryBar == iTime(_Symbol, PERIOD_CURRENT, 0))
+      return false;
+   // 4) Martingale dihentikan saat mencapai max step (sampai profit)
+   if(InpStopOnMaxStep && g_martingaleStep >= InpMaxSteps)
+      return false;
+   // 5) Drawdown equity dari puncak
+   if(InpMaxEquityDDPct > 0 && g_peakEquity > 0)
+   {
+      double dd = (g_peakEquity - AccountInfoDouble(ACCOUNT_EQUITY)) / g_peakEquity * 100.0;
+      if(dd >= InpMaxEquityDDPct) return false;
+   }
+   // 6) Loss harian
+   if(InpMaxDailyLossPct > 0 && g_dayPeakEquity > 0)
+   {
+      double dd = (g_dayPeakEquity - AccountInfoDouble(ACCOUNT_EQUITY)) / g_dayPeakEquity * 100.0;
+      if(dd >= InpMaxDailyLossPct) return false;
+   }
+   return true;
+}
+
+// Tandai bahwa entry berhasil dilakukan (cooldown + once per bar)
+void MarkEntryUsed()
+{
+   g_lastEntryTime = TimeCurrent();
+   g_lastEntryBar  = iTime(_Symbol, PERIOD_CURRENT, 0);
 }
 
 //+------------------------------------------------------------------+
@@ -312,6 +481,15 @@ void DeleteAllObjects()
    {
       string name = ObjectName(0, i);
       if(StringFind(name, PREFIX) == 0) ObjectDelete(0, name);
+   }
+}
+
+void DeleteAStarVisual()
+{
+   for(int i = ObjectsTotal(0) - 1; i >= 0; i--)
+   {
+      string name = ObjectName(0, i);
+      if(StringFind(name, ASTAR_PREFIX) == 0) ObjectDelete(0, name);
    }
 }
 
@@ -343,6 +521,7 @@ void DrawGTLevels()
    DrawHLine(VIS_PREFIX + "Inti",   close, gClrValue,  STYLE_SOLID, 2);
 }
 
+// [v1.11] Disederhanakan — style dipakai apa adanya
 void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style, int width = 1)
 {
    if(ObjectFind(0, name) < 0)
@@ -351,8 +530,8 @@ void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style, int 
       ObjectSetDouble(0, name, OBJPROP_PRICE, price);
       
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_STYLE, InpLevelStyle == STYLE_SOLID ? style : InpLevelStyle);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, width == 1 ? InpLevelWidth : width);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, (width == 1) ? InpLevelWidth : width);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    if(InpShowLabels)
       ObjectSetString(0, name, OBJPROP_TEXT, " " + StringSubstr(name, StringLen(VIS_PREFIX)));
@@ -409,7 +588,7 @@ void ResetDashboard() { DeleteAllObjects(); CreateDashboard(); }
 bool CreateDashboard()
 {
    int y = Y_Offset;
-   int totalH = (currTab == TAB_DASHBOARD) ? 525 : 410;
+   int totalH = (currTab == TAB_DASHBOARD) ? 620 : 410;
 
    CreateRect(PREFIX + "Main", X_Offset, y, Panel_Width, totalH, gClrBg, gClrBorder);
    CreateCornerBrackets(X_Offset - 2, y - 2, Panel_Width + 4, totalH + 4, 15, gClrAccent);
@@ -473,6 +652,7 @@ void CreateDashboardTab(int y)
    CreateQuadBarRow(PREFIX + "R_Range", y, "Julat"); y += ROW_H + 5;
 
    UpdateInfoSectionOnDashboard(y);
+   CreateGenesisPanel(y + 140);
 }
 
 void UpdateInfoSectionOnDashboard(int y)
@@ -510,6 +690,258 @@ void UpdateInfoSectionOnDashboard(int y)
    CreateLabel(PREFIX + "Sym_SOPtsVal",   X_Offset + Panel_Width - 20, infoY, "0 pts",       gClrValue, 8, FONT_MAIN, ANCHOR_RIGHT_UPPER);
 }
 
+//+------------------------------------------------------------------+
+//| [v1.12] Panel GT GENESIS - Penjelasan Angka Faktual GT           |
+//+------------------------------------------------------------------+
+void CreateGenesisPanel(int y)
+{
+   CreateRect(PREFIX + "Gs_Bg", X_Offset + 4, y, Panel_Width - 8, 152, gClrStripe, gClrBorder);
+   int lineY = y + 8;
+   CreateLabel(PREFIX + "Gs_Title", X_Offset + 20, lineY, "GT GENESIS — Sinyal Angka Faktual", gClrAccent, 9);
+   lineY += 22;
+
+   int col1X = X_Offset + 20;
+   int col2X = X_Offset + Panel_Width / 2 + 10;
+
+   // Kolom 1: Tinggi | Atas | Bawah | Rendah
+   CreateLabel(PREFIX + "Gs_T1L", col1X,        lineY, "Tinggi", gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_T1D", col1X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_T1V", col1X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_T2L", col1X,        lineY, "Atas",   gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_T2D", col1X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_T2V", col1X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_T3L", col1X,        lineY, "Bawah",  gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_T3D", col1X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_T3V", col1X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_T4L", col1X,        lineY, "Rendah", gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_T4D", col1X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_T4V", col1X + 195,  lineY, "-", gClrValue, 8);
+
+   // Kolom 2: Awal | Neto | Inti | Julat
+   lineY = y + 30;
+   CreateLabel(PREFIX + "Gs_U1L", col2X,        lineY, "Awal",   gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_U1D", col2X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_U1V", col2X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_U2L", col2X,        lineY, "Neto",   gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_U2D", col2X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_U2V", col2X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_U3L", col2X,        lineY, "Inti",   gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_U3D", col2X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_U3V", col2X + 195,  lineY, "-", gClrValue, 8);
+   lineY += 20;
+   CreateLabel(PREFIX + "Gs_U4L", col2X,        lineY, "Julat",  gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_U4D", col2X + 55,   lineY, "-", clrSilver, 7);
+   CreateLabel(PREFIX + "Gs_U4V", col2X + 195,  lineY, "-", gClrValue, 8);
+
+   // Baris konfirmasi GT & rekomendasi
+   lineY = y + 112;
+   CreateLabel(PREFIX + "Gs_GTL", col1X,        lineY, "GT Konfirm", gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_GTD", col1X + 85,   lineY, "-", clrSilver, 8);
+   CreateLabel(PREFIX + "Gs_GTV", col1X + 195,  lineY, "-", gClrValue, 8);
+
+   CreateLabel(PREFIX + "Gs_RecL", col2X,        lineY, "SINYAL:", gClrAccent, 8);
+   CreateLabel(PREFIX + "Gs_RecD", col2X + 95,   lineY, "-", gClrValue, 9);
+}
+
+//--- helper: atur teks + warna sinyal (strength: 3=KUAT, 2=MODERAT, 1=LEMAH, 0=NETRAL)
+void SetSignal(string dir, int strength, string &sig, color &clr, int &sc)
+{
+   if(strength <= 0) { sig = "NETRAL"; clr = clrSilver; sc = 0; return; }
+   if(dir == "BUY")
+   {
+      sig = (strength == 3) ? "BUY KUAT" : (strength == 2) ? "BUY MODERAT" : "BUY LEMAH";
+      clr = (strength == 3) ? clrLime : (strength == 2) ? clrGold : clrPaleGreen;
+   }
+   else
+   {
+      sig = (strength == 3) ? "SELL KUAT" : (strength == 2) ? "SELL MODERAT" : "SELL LEMAH";
+      clr = (strength == 3) ? clrRed : (strength == 2) ? clrOrange : clrSalmon;
+   }
+   sc = (dir == "BUY") ? strength : -strength;
+}
+
+//--- Sinyal Tinggi: breakout resistance
+void SigTinggi(double high, double prevHigh, double open, double close, string &sig, color &clr, int &sc)
+{
+   if(high > prevHigh)      SetSignal("BUY", 3, sig, clr, sc);
+   else if(close > open)    SetSignal("BUY", 1, sig, clr, sc);
+   else                     SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Atas: tutup dekat puncak (jejak atas)
+void SigAtas(double open, double close, double high, string &sig, color &clr, int &sc)
+{
+   double body   = MathAbs(close - open);
+   double upWick = high - MathMax(open, close);
+   if(close > open)
+      SetSignal("BUY", (upWick <= body * InpWickMaxRatio) ? 3 : 2, sig, clr, sc);
+   else if(close < open)
+      SetSignal("SELL", 1, sig, clr, sc);
+   else
+      SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Bawah: tutup dekat dasar (jejak bawah)
+void SigBawah(double open, double close, double low, string &sig, color &clr, int &sc)
+{
+   double body   = MathAbs(close - open);
+   double dnWick = MathMin(open, close) - low;
+   if(close < open)
+      SetSignal("SELL", (dnWick <= body * InpWickMaxRatio) ? 3 : 2, sig, clr, sc);
+   else if(close > open)
+      SetSignal("BUY", 1, sig, clr, sc);
+   else
+      SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Rendah: breakdown support
+void SigRendah(double low, double prevLow, double open, double close, string &sig, color &clr, int &sc)
+{
+   if(low < prevLow)        SetSignal("SELL", 3, sig, clr, sc);
+   else if(close < open)    SetSignal("SELL", 1, sig, clr, sc);
+   else                     SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Awal: gap / posisi pembukaan
+void SigAwal(double open, double prevOpen, double prevClose, string &sig, color &clr, int &sc)
+{
+   if(open > prevClose)        SetSignal("BUY", 3, sig, clr, sc);
+   else if(open < prevClose)   SetSignal("SELL", 3, sig, clr, sc);
+   else if(open > prevOpen)    SetSignal("BUY", 1, sig, clr, sc);
+   else if(open < prevOpen)    SetSignal("SELL", 1, sig, clr, sc);
+   else                        SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Neto: kekuatan momentum tubuh candle
+void SigNeto(int neto, int julat, string &sig, color &clr, int &sc)
+{
+   double ratio = (julat > 0) ? MathAbs(neto) / (double)julat : 0;
+   int st = (ratio >= InpBodyKuatRatio) ? 3 : (ratio >= InpBodyModeratRatio) ? 2 : 1;
+   if(neto > 0)      SetSignal("BUY",  st, sig, clr, sc);
+   else if(neto < 0) SetSignal("SELL", st, sig, clr, sc);
+   else              SetSignal("", 0, sig, clr, sc);
+}
+
+//--- Sinyal Inti: posisi penutupan dalam rentang bar
+void SigInti(double high, double low, double close, string &sig, color &clr, int &sc)
+{
+   double range = high - low;
+   if(range <= 0) { SetSignal("", 0, sig, clr, sc); return; }
+   double pos = (close - low) / range;
+   if(pos >= InpCloseKuatRatio)         SetSignal("BUY", 3, sig, clr, sc);
+   else if(pos >= InpCloseModeratRatio) SetSignal("BUY", 2, sig, clr, sc);
+   else if(pos >= 0.45)                 SetSignal("", 0, sig, clr, sc);
+   else if(pos >= InpCloseSellModerat)  SetSignal("SELL", 2, sig, clr, sc);
+   else                                 SetSignal("SELL", 3, sig, clr, sc);
+}
+
+//--- Sinyal Julat: volatilitas relatif vs rata-rata N bar
+void SigJulat(int neto, int julat, double avgJulat, double point, string &sig, color &clr, int &sc)
+{
+   double ratio = (avgJulat > 0) ? (julat * point) / avgJulat : 1.0;
+   string dir   = (neto > 0) ? "BUY" : (neto < 0) ? "SELL" : "";
+   if(ratio >= InpJulatKuatRatio)          SetSignal(dir, 3, sig, clr, sc);
+   else if(ratio <= InpJulatKompresiRatio) SetSignal(dir, 2, sig, clr, sc);
+   else                                    SetSignal(dir, 1, sig, clr, sc);
+}
+
+void UpdateGenesisPanel()
+{
+   double open0  = iOpen(_Symbol, PERIOD_CURRENT, 0);
+   double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
+   double high0  = iHigh(_Symbol, PERIOD_CURRENT, 0);
+   double low0   = iLow(_Symbol, PERIOD_CURRENT, 0);
+   if(open0 == 0) return;
+
+   double open1  = iOpen(_Symbol, PERIOD_CURRENT, 1);
+   double close1 = iClose(_Symbol, PERIOD_CURRENT, 1);
+   double high1  = iHigh(_Symbol, PERIOD_CURRENT, 1);
+   double low1   = iLow(_Symbol, PERIOD_CURRENT, 1);
+
+   // Rata-rata julat N bar terakhir (volatilitas)
+   double avgJulat = 0;
+   int cnt = 0;
+   for(int i = 1; i <= InpJulatAvgBars; i++)
+   {
+      double h = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double l = iLow(_Symbol, PERIOD_CURRENT, i);
+      if(h > 0 && l > 0) { avgJulat += (h - l); cnt++; }
+   }
+   if(cnt > 0) avgJulat /= cnt;
+   if(avgJulat <= 0) avgJulat = myPoint;
+
+   double bH = MathMax(open0, close0);   // Atas (jejak atas)
+   double bL = MathMin(open0, close0);   // Bawah (jejak bawah)
+   int neto  = (int)((close0 - open0) / myPoint);   // Selisih awal-inti
+   int julat = (int)((high0 - low0) / myPoint);     // Rentang tinggi-rendah
+
+   int total = 0;
+   string sig; color clr; int sc;
+
+   // Kolom 1: Tinggi | Atas | Bawah | Rendah
+   SigTinggi(high0, high1, open0, close0, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_T1D", sig, clr);
+   SetVal(PREFIX + "Gs_T1V", DoubleToString(high0, myDigits), gClrValue);
+
+   SigAtas(open0, close0, high0, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_T2D", sig, clr);
+   SetVal(PREFIX + "Gs_T2V", DoubleToString(bH, myDigits), gClrValue);
+
+   SigBawah(open0, close0, low0, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_T3D", sig, clr);
+   SetVal(PREFIX + "Gs_T3V", DoubleToString(bL, myDigits), gClrValue);
+
+   SigRendah(low0, low1, open0, close0, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_T4D", sig, clr);
+   SetVal(PREFIX + "Gs_T4V", DoubleToString(low0, myDigits), gClrValue);
+
+   // Kolom 2: Awal | Neto | Inti | Julat
+   SigAwal(open0, open1, close1, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_U1D", sig, clr);
+   SetVal(PREFIX + "Gs_U1V", DoubleToString(open0, myDigits), gClrValue);
+
+   SigNeto(neto, julat, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_U2D", sig, clr);
+   SetVal(PREFIX + "Gs_U2V", (neto >= 0 ? "+" : "") + IntegerToString(neto) + " pts", clr);
+
+   SigInti(high0, low0, close0, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_U3D", sig, clr);
+   SetVal(PREFIX + "Gs_U3V", DoubleToString(close0, myDigits), gClrValue);
+
+   SigJulat(neto, julat, avgJulat, myPoint, sig, clr, sc); total += sc;
+   SetVal(PREFIX + "Gs_U4D", sig, clr);
+   SetVal(PREFIX + "Gs_U4V", IntegerToString(julat) + " pts", gClrValue);
+
+   // Konfirmasi arah timeframe GT besar (bar tertutup)
+   double gtOpen  = iOpen(_Symbol, InpGTTimeframe, 1);
+   double gtClose = iClose(_Symbol, InpGTTimeframe, 1);
+   string gtSig = "NETRAL"; color gtClr = clrSilver; int gtSc = 0;
+   if(gtOpen > 0 && gtClose > 0)
+   {
+      if(gtClose > gtOpen)      { gtSig = "BUY";  gtClr = clrLime;   gtSc = 1; }
+      else if(gtClose < gtOpen) { gtSig = "SELL"; gtClr = clrRed; gtSc = -1; }
+   }
+   total += gtSc;
+   SetVal(PREFIX + "Gs_GTD", gtSig, gtClr);
+   SetVal(PREFIX + "Gs_GTV", (gtSc >= 0 ? "+" : "") + IntegerToString(gtSc), gtClr);
+
+   // Sinyal agregat (8 sinyal + konfirmasi GT)
+   string rec; color recClr;
+   if(total >= InpRecoBuyLevel)        { rec = "BUY KUAT";     recClr = clrLime; }
+   else if(total >= 3)                 { rec = "BUY MODERAT";  recClr = clrGold; }
+   else if(total >= 1)                 { rec = "BUY LEMAH";    recClr = clrPaleGreen; }
+   else if(total <= InpRecoSellLevel)  { rec = "SELL KUAT";    recClr = clrRed; }
+   else if(total <= -3)                { rec = "SELL MODERAT"; recClr = clrOrange; }
+   else if(total <= -1)                { rec = "SELL LEMAH";   recClr = clrSalmon; }
+   else                                { rec = "NETRAL";       recClr = clrSilver; }
+   SetVal(PREFIX + "Gs_RecD", rec + " (" + IntegerToString(total) + ")", recClr);
+}
+
 void CreateAboutTab(int y)
 {
    int contentX = X_Offset + 20;
@@ -528,15 +960,15 @@ void CreateAboutTab(int y)
    CreateLabel(PREFIX + "Ab_DevVal",    contentX + 120, lineY, "MOCHAMAD TABRANI", gClrValue, 8);
    lineY += 20;
    CreateLabel(PREFIX + "Ab_VerLabel",  contentX,       lineY, "Version:",      gClrLabel, 8);
-   CreateLabel(PREFIX + "Ab_VerVal",    contentX + 120, lineY, "0.01 Professional", gClrValue, 8);
+   CreateLabel(PREFIX + "Ab_VerVal",    contentX + 120, lineY, "1.12 Professional + A*", gClrValue, 8);
    lineY += 20;
    CreateLabel(PREFIX + "Ab_Method",    contentX,       lineY, "Methodology:",  gClrLabel, 8);
-   CreateLabel(PREFIX + "Ab_MethodVal", contentX + 120, lineY, "Grafik Tabranij (GT) Matematika Pasar", gClrValue, 8);
+   CreateLabel(PREFIX + "Ab_MethodVal", contentX + 120, lineY, "Grafik Tabranij + A* Pathfinding", gClrValue, 8);
    
    lineY += 50;
    CreateRect(PREFIX + "Ab_Box",    contentX, lineY, contentW, 100, gClrBg, clrSilver);
    CreateLabel(PREFIX + "Ab_Status",  contentX + 10, lineY + 10, "STATUS SISTEM: OPERASIONAL",                     gClrSuccess, 9);
-   CreateLabel(PREFIX + "Ab_Lince",   contentX + 10, lineY + 30, "License: KEBUN SALDO Agustus 2026",                clrSilver,   8);
+   CreateLabel(PREFIX + "Ab_Lince",   contentX + 10, lineY + 30, "License: BLUCHIP Agustus 2026",                clrSilver,   8);
    CreateLabel(PREFIX + "Ab_Support", contentX + 10, lineY + 70, "Support: mql5.com/getbos | t.me/jackmusk",   gClrAccent,  8);
 }
 
@@ -550,6 +982,7 @@ void CreateTradingTab(int y)
    if(InpStrategy == STRAT_LAYER)  stratLabel = "Layer / Grid";
    else if(InpStrategy == STRAT_ZIGZAG) stratLabel = "Zigzag Bounce";
    else if(InpStrategy == STRAT_SIGNAL) stratLabel = "Sinyal GT A-E";
+   else if(InpStrategy == STRAT_ASTAR)  stratLabel = "A* Optimal Path";
    
    CreateLabel(PREFIX + "Tr_Title", contentX, lineY, "RINGKASAN PENGATURAN ALGORITMA", gClrAccent, 10);
    lineY += 30;
@@ -578,7 +1011,11 @@ void CreateTradingTab(int y)
    lineY += 35;
    CreateLabel(PREFIX + "Tr_Note",  contentX, lineY, "Ubah strategi via F7 → Inputs → InpStrategy", clrSilver, 8);
    lineY += 15;
-   CreateLabel(PREFIX + "Tr_Note2", contentX, lineY, "Trobosan | Layer | Zigzag | Sinyal GT (A-E)", clrSilver, 8);
+   CreateLabel(PREFIX + "Tr_Note2", contentX, lineY, "Trobosan | Layer | Zigzag | Sinyal GT | A* Path", clrSilver, 8);
+
+   // [v1.11] Tombol darurat tutup semua posisi
+   lineY += 30;
+   CreateButton(PREFIX + "BTN_CLOSEALL", X_Offset + Panel_Width/2, lineY, 220, 35, "TUTUP SEMUA POSISI", clrWhite, gClrDanger);
 }
 
 void CreateColorsTab(int y)
@@ -674,6 +1111,7 @@ void UpdateGUILabels()
    UpdateBarData(0, "_v0", gClrAccent);
    
    UpdateInfoSection();
+   if(currTab == TAB_DASHBOARD) UpdateGenesisPanel();
    ChartRedraw();
 }
 
@@ -991,11 +1429,19 @@ void WriteGenesisJSON()
    if(InpStrategy == STRAT_LAYER)  stratName = "LAYER";
    else if(InpStrategy == STRAT_ZIGZAG) stratName = "ZIGZAG";
    else if(InpStrategy == STRAT_SIGNAL) stratName = "SIGNAL";
+   else if(InpStrategy == STRAT_ASTAR)  stratName = "ASTAR";
    json += "\"strategy\":\"" + stratName + "\",";
    json += "\"signal_type\":\"" + g_lastSignalType + "\",";
    json += "\"signal_score\":" + IntegerToString(g_lastSignalScore) + ",";
    json += "\"martingale_step\":" + IntegerToString(g_martingaleStep) + ",";
-   json += "\"positions\":" + IntegerToString(CountMyPositions());
+   json += "\"positions\":" + IntegerToString(CountMyPositions()) + ",";
+   // [v1.11] Status pengaman utk TanyaHargaBot
+   json += "\"trading_allowed\":" + (IsTradingAllowed() ? "true" : "false") + ",";
+   json += "\"equity_dd_pct\":" + DoubleToString(GetEquityDDPct(), 2) + ",";
+   // [v1.12] Status A* untuk TanyaHargaBot
+   json += "\"astar_status\":\"" + g_astarStatus + "\",";
+   json += "\"astar_score\":" + DoubleToString(g_astarScore, 2) + ",";
+   json += "\"astar_swings\":" + IntegerToString(g_astarNodeCount);
    json += "}";
 
    // Tulis ke MQL5/Files/genesis_data.json (folder terminal)
@@ -1088,6 +1534,7 @@ void UpdateCountdown()
 //|  STRAT_LAYER    : Layer / Grid averaging                         |
 //|  STRAT_ZIGZAG   : Zigzag Bouncing Martingale                     |
 //|  STRAT_SIGNAL   : Sinyal GT A-E + SL/TP dari level GT            |
+//|  STRAT_ASTAR    : A* Pathfinding antar level harga (v1.12)       |
 //+------------------------------------------------------------------+
 
 //--- Helpers
@@ -1117,12 +1564,15 @@ double NormalizeLot(double lot)
    return lot;
 }
 
+// [v1.11] Lot dibatasi oleh InpMaxLotCap
 double CalcNextLot()
 {
    double nextLot = InpLot;
    if(g_martingaleStep > 0)
       nextLot = InpLot * MathPow(InpMultiplier, g_martingaleStep);
-   return NormalizeLot(nextLot);
+   nextLot = NormalizeLot(nextLot);
+   if(nextLot > InpMaxLotCap) nextLot = NormalizeLot(InpMaxLotCap);
+   return nextLot;
 }
 
 int GetGT_RangePoints(int shift = 1)
@@ -1134,6 +1584,7 @@ int GetGT_RangePoints(int shift = 1)
 }
 
 //--- Hitung SL/TP dari level GT atau fallback points
+// [v1.11] + validasi jarak minimal SL/TP sesuai aturan broker
 void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
 {
    double prevHigh = iHigh(_Symbol, InpGTTimeframe, 1);
@@ -1169,8 +1620,28 @@ void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
          tp = NormalizeDouble(entry - InpTP * myPoint, myDigits);
       }
    }
+
+   // Pastikan jarak SL/TP >= stops level broker (cek SYMBOL_TRADE_STOPS_LEVEL)
+   long stopsLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   if(stopsLevel > 0)
+   {
+      double minDist = stopsLevel * myPoint;
+      if(type == POSITION_TYPE_BUY)
+      {
+         if(sl > 0 && entry - sl < minDist) sl = entry - minDist;
+         if(tp > 0 && tp - entry < minDist) tp = entry + minDist;
+      }
+      else
+      {
+         if(sl > 0 && sl - entry < minDist) sl = entry + minDist;
+         if(tp > 0 && entry - tp < minDist) tp = entry - minDist;
+      }
+   }
+   sl = NormalizeDouble(sl, myDigits);
+   tp = NormalizeDouble(tp, myDigits);
 }
 
+// [v1.11] Cek margin cukup + validasi sebelum kirim order
 bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
 {
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1178,6 +1649,21 @@ bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
    double price = (type == POSITION_TYPE_BUY) ? ask : bid;
    double sl = 0, tp = 0;
    CalcGTSLTP(type, price, sl, tp);
+
+   // Cek margin cukup sebelum entry
+   double marginNeed = 0;
+   ENUM_ORDER_TYPE ot = (type == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(ot, _Symbol, lot, price, marginNeed))
+   {
+      Print("GT: Gagal hitung margin untuk ", lot, " lot.");
+      return false;
+   }
+   if(marginNeed > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
+   {
+      Print("GT: Margin tidak cukup. Butuh ", DoubleToString(marginNeed, 2),
+            " | Free: ", DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2));
+      return false;
+   }
 
    bool ok = false;
    if(type == POSITION_TYPE_BUY)
@@ -1187,6 +1673,7 @@ bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
 
    if(ok)
    {
+      MarkEntryUsed();  // aktifkan cooldown + once per bar
       g_lastDirection = type;
       Print("GT [", g_activeStrategy, "] ", (type == POSITION_TYPE_BUY ? "BUY" : "SELL"),
             " | Lot:", DoubleToString(lot, 2),
@@ -1199,7 +1686,29 @@ bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
    return ok;
 }
 
+// [v1.11] Unit threshold adaptif dari ATR (kalibrasi per simbol)
+int GetSignalUnitPts()
+{
+   int unit = InpSigBasePts;
+   if(InpUseATRScale)
+   {
+      if(g_atrHandle == INVALID_HANDLE)
+         g_atrHandle = iATR(_Symbol, InpGTTimeframe, InpATRPeriod);
+      if(g_atrHandle != INVALID_HANDLE)
+      {
+         double buf[];
+         if(CopyBuffer(g_atrHandle, 0, 0, 1, buf) == 1 && buf[0] > 0)
+         {
+            int atrPts = (int)(buf[0] / myPoint);
+            unit = MathMax(unit, (int)(atrPts * InpATRFactor));
+         }
+      }
+   }
+   return unit;
+}
+
 //--- Engine Sinyal GT A-E (mirror bot signal_engine)
+// [v1.11] Threshold dapat diskalakan otomatis dengan ATR
 // Return: 1=BUY, -1=SELL, 0=NETRAL; score 0-10
 int EvaluateGTSignal(int &score, string &label)
 {
@@ -1240,8 +1749,26 @@ int EvaluateGTSignal(int &score, string &label)
    int totalWick = atas0 + bawah0; if(totalWick <= 0) totalWick = 1;
    double imbalance = (double)(atas0 - bawah0) / totalWick;
 
+   // --- Threshold adaptif (ATR) ---
+   int momMin  = InpSigMomPts;
+   int pullPts = InpSigPullbackPts;
+   int rngMax  = InpSigRangePts;
+   int baseMin = InpSigBasePts;
+   int netoDMin = 4;
+   int unit = GetSignalUnitPts();
+   if(InpUseATRScale && unit > 0)
+   {
+      momMin   = MathMax(momMin,   (int)(unit * 0.5));
+      pullPts  = MathMax(pullPts,  (int)(unit * 0.15));
+      rngMax   = MathMax(rngMax,   (int)(unit * 0.6));
+      baseMin  = MathMax(baseMin,  (int)(unit * 0.4));
+      netoDMin = MathMax(netoDMin, (int)(unit * 0.25));
+   }
+   int jarakWickPts  = pullPts;
+   int jarakRangePts = MathMax(12, (int)(rngMax * 0.4));
+
    // Sinyal A – Momentum Kuat
-   if(MathAbs(neto0) >= 8 && MathAbs(neto1) >= 6 && (julat1 == 0 || julat0 > julat1 * 1.15))
+   if(MathAbs(neto0) >= momMin && MathAbs(neto1) >= 6 && (julat1 == 0 || julat0 > julat1 * 1.15))
    {
       if(neto0 > 0 && neto1 > 0)
       { label = "A_MOMENTUM_BUY"; score = 8 + MathMin(2, neto0 / 5); return 1; }
@@ -1252,23 +1779,23 @@ int EvaluateGTSignal(int &score, string &label)
    // Sinyal B – Pullback
    if(neto2 * neto3 > 0 && MathAbs(neto2) >= 5)
    {
-      if(neto2 > 0 && neto0 <= 3 && jarakLow < 15 * myPoint)
+      if(neto2 > 0 && neto0 <= 3 && jarakLow < jarakWickPts * myPoint)
       { label = "B_PULLBACK_BUY"; score = 7; return 1; }
-      if(neto2 < 0 && neto0 >= -3 && jarakHigh < 15 * myPoint)
+      if(neto2 < 0 && neto0 >= -3 && jarakHigh < jarakWickPts * myPoint)
       { label = "B_PULLBACK_SELL"; score = 7; return -1; }
    }
 
    // Sinyal C – Range
-   if((julat1 > 0 && julat1 < 28) && (julat2 == 0 || julat2 < 30) && (julat3 == 0 || julat3 < 32))
+   if((julat1 > 0 && julat1 < rngMax) && (julat2 == 0 || julat2 < (int)(rngMax * 1.1)) && (julat3 == 0 || julat3 < (int)(rngMax * 1.15)))
    {
-      if(jarakLow < 12 * myPoint)
+      if(jarakLow < jarakRangePts * myPoint)
       { label = "C_RANGE_BUY"; score = 6; return 1; }
-      if(jarakHigh < 12 * myPoint)
+      if(jarakHigh < jarakRangePts * myPoint)
       { label = "C_RANGE_SELL"; score = 6; return -1; }
    }
 
    // Sinyal D – Imbalance
-   if(MathAbs(imbalance) > 0.45 && MathAbs(neto0) >= 4)
+   if(MathAbs(imbalance) > 0.45 && MathAbs(neto0) >= netoDMin)
    {
       if(imbalance > 0.45 && neto0 < 0)
       { label = "D_PRESSURE_SELL"; score = 7; return -1; }
@@ -1285,7 +1812,7 @@ int EvaluateGTSignal(int &score, string &label)
    }
 
    // Dasar – Neto kuat
-   if(MathAbs(neto0) >= 10)
+   if(MathAbs(neto0) >= baseMin)
    {
       if(neto0 > 0) { label = "DASAR_BUY"; score = 6; return 1; }
       else          { label = "DASAR_SELL"; score = 6; return -1; }
@@ -1309,6 +1836,7 @@ bool CheckBreakout(ENUM_POSITION_TYPE &signalType)
 void LogicBreakout()
 {
    g_activeStrategy = "BREAKOUT";
+   if(!IsTradingAllowed()) return;
    if(CountMyPositions() > 0) return;
 
    if(InpRequireSignal)
@@ -1328,6 +1856,7 @@ void LogicBreakout()
 void LogicLayer()
 {
    g_activeStrategy = "LAYER";
+   if(!IsTradingAllowed()) return;
    int posCount = CountMyPositions();
    if(posCount >= InpMaxSteps) return;
 
@@ -1373,6 +1902,7 @@ void LogicLayer()
    }
 
    double lot = NormalizeLot(InpLot * MathPow(InpMultiplier, posCount));
+   if(lot > InpMaxLotCap) lot = NormalizeLot(InpMaxLotCap); // [v1.11] batas lot
    OpenPosition(prefer, lot, StringFormat("GT Layer #%d", posCount + 1));
 }
 
@@ -1380,6 +1910,7 @@ void LogicLayer()
 void LogicZigzag()
 {
    g_activeStrategy = "ZIGZAG";
+   if(!IsTradingAllowed()) return;
    if(CountMyPositions() > 0) return;
 
    double bid  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1422,6 +1953,7 @@ void LogicZigzag()
 void LogicSignal()
 {
    g_activeStrategy = "SIGNAL";
+   if(!IsTradingAllowed()) return;
    if(CountMyPositions() > 0) return;
 
    int sc; string lb;
@@ -1435,6 +1967,245 @@ void LogicSignal()
    OpenPosition(sig, CalcNextLot(), "GT Sinyal " + lb);
 }
 
+//==================== STRATEGY 5: A* PATHFINDING (v1.12) ====================
+int DetectSwings(AStarNode &nodes[], int maxBars = 80, int lookback = 3)
+{
+   ArrayResize(nodes, 0);
+   int count = 0;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   for(int i = lookback; i < maxBars - lookback; i++)
+   {
+      double h = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double l = iLow(_Symbol, PERIOD_CURRENT, i);
+      
+      bool isSwingHigh = true;
+      bool isSwingLow  = true;
+      
+      for(int j = 1; j <= lookback; j++)
+      {
+         if(iHigh(_Symbol, PERIOD_CURRENT, i-j) >= h || iHigh(_Symbol, PERIOD_CURRENT, i+j) >= h)
+            isSwingHigh = false;
+         if(iLow(_Symbol, PERIOD_CURRENT, i-j) <= l || iLow(_Symbol, PERIOD_CURRENT, i+j) <= l)
+            isSwingLow = false;
+      }
+      
+      if(isSwingHigh && h > bid)
+      {
+         AStarNode n;
+         n.price = h; n.barIndex = i; n.isHigh = true;
+         n.g = n.h = n.f = 0; n.parentIndex = -1;
+         ArrayResize(nodes, count+1);
+         nodes[count++] = n;
+      }
+      if(isSwingLow && l < bid)
+      {
+         AStarNode n;
+         n.price = l; n.barIndex = i; n.isHigh = false;
+         n.g = n.h = n.f = 0; n.parentIndex = -1;
+         ArrayResize(nodes, count+1);
+         nodes[count++] = n;
+      }
+   }
+   return count;
+}
+
+double GetCurrentATR()
+{
+   if(g_atrHandle == INVALID_HANDLE)
+      g_atrHandle = iATR(_Symbol, InpGTTimeframe, InpATRPeriod);
+   if(g_atrHandle == INVALID_HANDLE) return 0;
+   
+   double buf[];
+   if(CopyBuffer(g_atrHandle, 0, 0, 1, buf) == 1 && buf[0] > 0)
+      return buf[0];
+   return 0;
+}
+
+bool RunAStar(AStarNode &nodes[], int startIdx, int goalIdx, double atr, int &path[])
+{
+   int n = ArraySize(nodes);
+   if(n < 2 || startIdx < 0 || goalIdx < 0 || atr <= 0) return false;
+   
+   for(int i=0; i<n; i++)
+   {
+      nodes[i].g = 1e10;
+      nodes[i].h = MathAbs(nodes[goalIdx].price - nodes[i].price) / atr;
+      nodes[i].f = 1e10;
+      nodes[i].parentIndex = -1;
+   }
+   
+   nodes[startIdx].g = 0;
+   nodes[startIdx].f = nodes[startIdx].h;
+   
+   int open[];
+   ArrayResize(open, 1);
+   open[0] = startIdx;
+   
+   bool closed[];
+   ArrayResize(closed, n);
+   ArrayInitialize(closed, false);
+   
+   while(ArraySize(open) > 0)
+   {
+      int best = 0;
+      for(int i=1; i<ArraySize(open); i++)
+         if(nodes[open[i]].f < nodes[open[best]].f) best = i;
+      
+      int current = open[best];
+      for(int i=best; i<ArraySize(open)-1; i++) open[i] = open[i+1];
+      ArrayResize(open, ArraySize(open)-1);
+      
+      if(current == goalIdx)
+      {
+         ArrayResize(path, 0);
+         int cur = goalIdx;
+         while(cur != -1)
+         {
+            ArrayResize(path, ArraySize(path)+1);
+            path[ArraySize(path)-1] = cur;
+            cur = nodes[cur].parentIndex;
+         }
+         // reverse
+         for(int i=0; i<ArraySize(path)/2; i++)
+         {
+            int tmp = path[i];
+            path[i] = path[ArraySize(path)-1-i];
+            path[ArraySize(path)-1-i] = tmp;
+         }
+         return true;
+      }
+      
+      closed[current] = true;
+      
+      for(int i=0; i<n; i++)
+      {
+         if(closed[i] || i == current) continue;
+         if(nodes[i].barIndex >= nodes[current].barIndex) continue;
+         
+         double dist = MathAbs(nodes[i].price - nodes[current].price) / atr;
+         double edgeCost = dist + 0.15;
+         
+         double tentative_g = nodes[current].g + edgeCost;
+         if(tentative_g < nodes[i].g)
+         {
+            nodes[i].parentIndex = current;
+            nodes[i].g = tentative_g;
+            nodes[i].f = tentative_g + nodes[i].h;
+            
+            bool inOpen = false;
+            for(int k=0; k<ArraySize(open); k++)
+               if(open[k] == i) { inOpen = true; break; }
+            if(!inOpen)
+            {
+               ArrayResize(open, ArraySize(open)+1);
+               open[ArraySize(open)-1] = i;
+            }
+         }
+      }
+   }
+   return false;
+}
+
+void DrawAStarPath(AStarNode &nodes[], int &path[])
+{
+   DeleteAStarVisual();
+   if(!InpAStarVisual || ArraySize(path) < 2) return;
+   
+   for(int i=0; i<ArraySize(path)-1; i++)
+   {
+      string name = ASTAR_PREFIX + "L" + IntegerToString(i);
+      ObjectCreate(0, name, OBJ_TREND, 0, 
+                   iTime(_Symbol, PERIOD_CURRENT, nodes[path[i]].barIndex), nodes[path[i]].price,
+                   iTime(_Symbol, PERIOD_CURRENT, nodes[path[i+1]].barIndex), nodes[path[i+1]].price);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clrAqua);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   }
+}
+
+void LogicAStar()
+{
+   g_activeStrategy = "ASTAR";
+   if(!IsTradingAllowed()) return;
+   if(CountMyPositions() > 0) return;
+   
+   static datetime lastBar = 0;
+   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(curBar == lastBar) return;
+   lastBar = curBar;
+   g_astarLastBar = curBar;
+   
+   AStarNode nodes[];
+   int count = DetectSwings(nodes, InpAStarLookback, InpAStarSwingLook);
+   g_astarNodeCount = count;
+   if(count < 4)
+   {
+      g_astarStatus = "NO PATH";
+      return;
+   }
+   
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int startIdx = 0;
+   double minDist = 1e10;
+   for(int i=0; i<count; i++)
+   {
+      double d = MathAbs(nodes[i].price - bid);
+      if(d < minDist) { minDist = d; startIdx = i; }
+   }
+   
+   // Goal = swing terjauh di arah yang paling menjanjikan
+   int goalIdx = -1;
+   double bestScore = -1;
+   for(int i=0; i<count; i++)
+   {
+      if(i == startIdx) continue;
+      double score = MathAbs(nodes[i].price - bid) / (nodes[i].barIndex + 1.0);
+      if(score > bestScore) { bestScore = score; goalIdx = i; }
+   }
+   if(goalIdx < 0)
+   {
+      g_astarStatus = "NO PATH";
+      return;
+   }
+   g_astarStartPrice = nodes[startIdx].price;
+   g_astarGoalPrice  = nodes[goalIdx].price;
+   g_astarScore      = bestScore;
+   
+   double atr = GetCurrentATR();
+   if(atr <= 0)
+   {
+      g_astarStatus = "NO PATH";
+      return;
+   }
+   
+   int path[];
+   g_astarStatus = "NO PATH";
+   if(RunAStar(nodes, startIdx, goalIdx, atr, path))
+   {
+      DrawAStarPath(nodes, path);
+      g_astarStatus = "FOUND";
+      
+      // Keputusan entry sederhana berdasarkan arah jalur
+      double endPrice = nodes[path[ArraySize(path)-1]].price;
+      if(endPrice > bid + 10 * myPoint)
+      {
+         g_lastSignalType = "A*_BUY";
+         g_astarDirection = "BUY";
+         g_lastSignalScore = 8;
+         OpenPosition(POSITION_TYPE_BUY, CalcNextLot(), "GT A* Path BUY");
+      }
+      else if(endPrice < bid - 10 * myPoint)
+      {
+         g_lastSignalType = "A*_SELL";
+         g_astarDirection = "SELL";
+         g_lastSignalScore = 8;
+         OpenPosition(POSITION_TYPE_SELL, CalcNextLot(), "GT A* Path SELL");
+      }
+   }
+}
+
 //--- Dispatcher utama
 void ExecuteTradingLogic()
 {
@@ -1443,12 +2214,29 @@ void ExecuteTradingLogic()
       case STRAT_LAYER:    LogicLayer();    break;
       case STRAT_ZIGZAG:   LogicZigzag();   break;
       case STRAT_SIGNAL:   LogicSignal();   break;
+      case STRAT_ASTAR:    LogicAStar();    break;   // v1.12
       case STRAT_BREAKOUT:
       default:             LogicBreakout(); break;
    }
 }
 
+// [v1.11] Tombol darurat: tutup semua posisi milik EA ini
+void CloseMyPositions()
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+            PositionGetInteger(POSITION_MAGIC) == (long)InpMagic)
+            if(trade.PositionClose(ticket)) closed++;
+   }
+   if(closed > 0) Print("GT: Menutup ", closed, " posisi.");
+}
+
 //--- OnTradeTransaction: martingale step
+// [v1.11] Di max step → berhenti (bukan reset) jika InpStopOnMaxStep=true
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest     &request,
                         const MqlTradeResult      &result)
@@ -1473,43 +2261,22 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    }
    else if(profit < 0)
    {
+      if(InpStopOnMaxStep && g_martingaleStep >= InpMaxSteps)
+         return; // sudah di max step — tunggu profit, jangan tambah lagi
+
       g_martingaleStep++;
       if(g_martingaleStep >= InpMaxSteps)
       {
-         Print("GT: Max step tercapai (", InpMaxSteps, "). Reset.");
-         g_martingaleStep = 0;
+         if(InpStopOnMaxStep)
+            Print("GT: Max step tercapai (", InpMaxSteps, "). Entry dihentikan sampai profit.");
+         else
+         {
+            g_martingaleStep = 0;
+            Print("GT: Max step tercapai (", InpMaxSteps, "). Reset.");
+         }
       }
       else
          Print("GT: Loss. Step naik ke ", g_martingaleStep);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| [10] Close All Positions                                         |
-//+------------------------------------------------------------------+
-void CloseAllPositions(bool pos, bool pend)
-{
-   if(pos)
-   {
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-      {
-         ulong ticket = PositionGetTicket(i);
-         if(PositionSelectByTicket(ticket))
-            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
-               PositionGetInteger(POSITION_MAGIC) == (long)InpMagic)
-               trade.PositionClose(ticket);
-      }
-   }
-   if(pend)
-   {
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-      {
-         ulong ticket = OrderGetTicket(i);
-         if(OrderSelect(ticket))
-            if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
-               OrderGetInteger(ORDER_MAGIC) == (long)InpMagic)
-               trade.OrderDelete(ticket);
-      }
    }
 }
 //+------------------------------------------------------------------+
