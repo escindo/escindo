@@ -83,7 +83,36 @@ input int             InpLayerStepPts      = 100;           // Jarak antar layer
 input int             InpZigzagBouncePts   = 50;            // Toleransi bounce Zigzag (points)
 input bool            InpUseGTSLTP         = true;          // Pakai level GT untuk SL/TP
 input bool            InpRequireSignal     = false;         // Hanya entry jika sinyal A-E aktif
+input bool            InpAutoGenesis       = true;          // Pilih strategi otomatis dari kekuatan sinyal GT Genesis (KUAT=Breakout, MODERAT=Zigzag, LEMAH=Layer/inversi)
 input int             InpMagic             = 888999;        // Algorithm Serial ID
+
+//--- [v1.12b] MARTINGALE PER STRATEGI (base lot, multiplier, max steps terpisah)
+input string          _s2mg                = "======== MARTINGALE PER STRATEGI ========";
+input double          InpLotBreakout       = 0.01;   // Breakout: Base Lot
+input double          InpMultBreakout      = 2.0;    // Breakout: Multiplier
+input int             InpStepsBreakout     = 5;      // Breakout: Max Steps
+input double          InpLotLayer          = 0.01;   // Layer: Base Lot
+input double          InpMultLayer         = 2.0;    // Layer: Multiplier
+input int             InpStepsLayer        = 5;      // Layer: Max Steps
+input double          InpLotZigzag         = 0.01;   // Zigzag: Base Lot
+input double          InpMultZigzag        = 2.0;    // Zigzag: Multiplier
+input int             InpStepsZigzag       = 5;      // Zigzag: Max Steps
+input double          InpLotSignal         = 0.01;   // Sinyal: Base Lot
+input double          InpMultSignal        = 2.0;    // Sinyal: Multiplier
+input int             InpStepsSignal       = 5;      // Sinyal: Max Steps
+input double          InpLotAStar          = 0.01;   // A*: Base Lot
+input double          InpMultAStar         = 2.0;    // A*: Multiplier
+input int             InpStepsAStar        = 5;      // A*: Max Steps
+input int             InpTPBreakout        = 110;    // Breakout: Take Profit (pts)
+input int             InpSLBreakout        = 500;    // Breakout: Stop Loss (pts)
+input int             InpTPZigzag          = 80;     // Zigzag: Take Profit (pts)
+input int             InpSLZigzag          = 400;    // Zigzag: Stop Loss (pts)
+input int             InpTPLayer           = 60;     // Layer: Take Profit (pts)
+input int             InpSLLayer           = 600;    // Layer: Stop Loss (pts)
+input int             InpTPSignal          = 100;    // Sinyal GT: Take Profit (pts)
+input int             InpSLSignal          = 450;    // Sinyal GT: Stop Loss (pts)
+input int             InpTPAStar           = 120;    // A*: Take Profit (pts)
+input int             InpSLAStar           = 500;    // A*: Stop Loss (pts)
 
 //--- [v1.12] A* Settings
 input string          _s2a                 = "======== A* (AStar) ========";
@@ -153,6 +182,12 @@ bool     g_isFirstTrade = true; // Flag untuk perdagangan pertama
 
 // Multi-strategy state (shared with WriteGenesisJSON & trading logic)
 int                g_martingaleStep  = 0;
+// [v1.12b] Counter martingale per strategi (terpisah)
+int                g_stepBreakout  = 0;
+int                g_stepLayer     = 0;
+int                g_stepZigzag    = 0;
+int                g_stepSignal    = 0;
+int                g_stepAStar     = 0;
 ENUM_POSITION_TYPE g_lastDirection   = (ENUM_POSITION_TYPE)-1;
 string             g_lastSignalType  = "NETRAL";
 int                g_lastSignalScore = 0;
@@ -178,6 +213,19 @@ double             g_astarStartPrice = 0;
 double             g_astarGoalPrice  = 0;
 string             g_astarDirection  = "-";
 datetime           g_astarLastBar    = 0;
+
+// [v1.12b] GENESIS FAKTUAL - 4 metrik x 4 bar (GT3,GT2,GT1,GT Live)
+int                g_ch[4];    // sumbu atas   (pts)  [0]=Live [1]=GT1 [2]=GT2 [3]=GT3
+int                g_cl[4];    // sumbu bawah  (pts)
+int                g_oc[4];    // neto         (pts, +/-)
+int                g_lh[4];    // julat        (pts)
+int                g_genScore     = 0;
+int                g_genDir       = 0;      // 1=BUY, -1=SELL, 0=NETRAL
+int                g_genSupport   = 0;      // berapa metrik mendukung arah (0-4)
+int                g_genTotal     = 0;      // total metrik yg setuju (untuk % dukungan)
+string             g_genLabel     = "NETRAL";
+color              g_genColor     = clrSilver;
+string             g_stratDesc    = "-";    // keterangan strategi EA yg mendekati
 
 #define PREFIX          "GRAFIK TABRANIJ"
 #define COLOR_BG        C'45,45,45'    // Charcoal Grey (matching the image)
@@ -695,251 +743,203 @@ void UpdateInfoSectionOnDashboard(int y)
 //+------------------------------------------------------------------+
 void CreateGenesisPanel(int y)
 {
-   CreateRect(PREFIX + "Gs_Bg", X_Offset + 4, y, Panel_Width - 8, 152, gClrStripe, gClrBorder);
+   int pw = Panel_Width - 8;
+   CreateRect(PREFIX + "Gs_Bg", X_Offset + 4, y, pw, 215, gClrStripe, gClrBorder);
    int lineY = y + 8;
-   CreateLabel(PREFIX + "Gs_Title", X_Offset + 20, lineY, "GT GENESIS — Sinyal Angka Faktual", gClrAccent, 9);
+   CreateLabel(PREFIX + "Gs_Title", X_Offset + 15, lineY, "GT GENESIS - Sinyal Angka Faktual (pts)", gClrAccent, 9);
    lineY += 22;
 
-   int col1X = X_Offset + 20;
-   int col2X = X_Offset + Panel_Width / 2 + 10;
+   int labX  = X_Offset + 15;
+   int dataX = X_Offset + 90;
+   int colW  = (pw - 90 - 10) / 4;
 
-   // Kolom 1: Tinggi | Atas | Bawah | Rendah
-   CreateLabel(PREFIX + "Gs_T1L", col1X,        lineY, "Tinggi", gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_T1D", col1X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_T1V", col1X + 195,  lineY, "-", gClrValue, 8);
+   // Header kolom: GT3 (kiri) -> GT LIVE (kanan)
+   CreateLabel(PREFIX + "Gs_H3",    dataX + colW*0, lineY, "GT3",  clrAqua, 8);
+   CreateLabel(PREFIX + "Gs_H2",    dataX + colW*1, lineY, "GT2",  clrAqua, 8);
+   CreateLabel(PREFIX + "Gs_H1",    dataX + colW*2, lineY, "GT1",  clrAqua, 8);
+   CreateLabel(PREFIX + "Gs_HLIVE", dataX + colW*3, lineY, "LIVE", gClrAccent, 8);
    lineY += 20;
-   CreateLabel(PREFIX + "Gs_T2L", col1X,        lineY, "Atas",   gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_T2D", col1X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_T2V", col1X + 195,  lineY, "-", gClrValue, 8);
-   lineY += 20;
-   CreateLabel(PREFIX + "Gs_T3L", col1X,        lineY, "Bawah",  gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_T3D", col1X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_T3V", col1X + 195,  lineY, "-", gClrValue, 8);
-   lineY += 20;
-   CreateLabel(PREFIX + "Gs_T4L", col1X,        lineY, "Rendah", gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_T4D", col1X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_T4V", col1X + 195,  lineY, "-", gClrValue, 8);
 
-   // Kolom 2: Awal | Neto | Inti | Julat
-   lineY = y + 30;
-   CreateLabel(PREFIX + "Gs_U1L", col2X,        lineY, "Awal",   gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_U1D", col2X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_U1V", col2X + 195,  lineY, "-", gClrValue, 8);
-   lineY += 20;
-   CreateLabel(PREFIX + "Gs_U2L", col2X,        lineY, "Neto",   gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_U2D", col2X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_U2V", col2X + 195,  lineY, "-", gClrValue, 8);
-   lineY += 20;
-   CreateLabel(PREFIX + "Gs_U3L", col2X,        lineY, "Inti",   gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_U3D", col2X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_U3V", col2X + 195,  lineY, "-", gClrValue, 8);
-   lineY += 20;
-   CreateLabel(PREFIX + "Gs_U4L", col2X,        lineY, "Julat",  gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_U4D", col2X + 55,   lineY, "-", clrSilver, 7);
-   CreateLabel(PREFIX + "Gs_U4V", col2X + 195,  lineY, "-", gClrValue, 8);
+   // Baris Atas, Bawah, Neto, Julat
+   int ry = lineY;
+   CreateLabel(PREFIX + "Gs_Lch", labX, ry, "Atas",  gClrLabel, 8);
+   for(int c=0; c<4; c++) CreateLabel(PREFIX + "Gs_CH_"+IntegerToString(c), dataX+colW*c, ry, "-", gClrValue, 8);
+   ry += 20;
+   CreateLabel(PREFIX + "Gs_Lcl", labX, ry, "Bawah", gClrLabel, 8);
+   for(int c=0; c<4; c++) CreateLabel(PREFIX + "Gs_CL_"+IntegerToString(c), dataX+colW*c, ry, "-", gClrValue, 8);
+   ry += 20;
+   CreateLabel(PREFIX + "Gs_Loc", labX, ry, "Neto",  gClrLabel, 8);
+   for(int c=0; c<4; c++) CreateLabel(PREFIX + "Gs_OC_"+IntegerToString(c), dataX+colW*c, ry, "-", gClrValue, 8);
+   ry += 20;
+   CreateLabel(PREFIX + "Gs_Llh", labX, ry, "Julat", gClrLabel, 8);
+   for(int c=0; c<4; c++) CreateLabel(PREFIX + "Gs_LH_"+IntegerToString(c), dataX+colW*c, ry, "-", gClrValue, 8);
+   ry += 22;
 
-   // Baris konfirmasi GT & rekomendasi
-   lineY = y + 112;
-   CreateLabel(PREFIX + "Gs_GTL", col1X,        lineY, "GT Konfirm", gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_GTD", col1X + 85,   lineY, "-", clrSilver, 8);
-   CreateLabel(PREFIX + "Gs_GTV", col1X + 195,  lineY, "-", gClrValue, 8);
+   // Baris Agregat
+   CreateLabel(PREFIX + "Gs_LAgg", labX, ry, "Agregat", gClrAccent, 8);
+   for(int c=0; c<4; c++) CreateLabel(PREFIX + "Gs_Agg_"+IntegerToString(c), dataX+colW*c, ry, "-", gClrAccent, 8);
+   ry += 22;
 
-   CreateLabel(PREFIX + "Gs_RecL", col2X,        lineY, "SINYAL:", gClrAccent, 8);
-   CreateLabel(PREFIX + "Gs_RecD", col2X + 95,   lineY, "-", gClrValue, 9);
+   // Baris SINYAL
+   CreateLabel(PREFIX + "Gs_SigL",   labX, ry, "SINYAL", gClrAccent, 9);
+   CreateLabel(PREFIX + "Gs_SigV",   dataX, ry, "-", gClrValue, 9);
+   CreateLabel(PREFIX + "Gs_SigPct", dataX + 2*colW, ry, "-", clrSilver, 8);
+   ry += 20;
+   CreateLabel(PREFIX + "Gs_SigBar", dataX, ry, "-", gClrValue, 9);
+   ry += 22;
+
+   
 }
 
-//--- helper: atur teks + warna sinyal (strength: 3=KUAT, 2=MODERAT, 1=LEMAH, 0=NETRAL)
-void SetSignal(string dir, int strength, string &sig, color &clr, int &sc)
+
+//--- [v1.12b] BANGUN MATRIKS 16 ANGKA FAKTUAL (GT3,GT2,GT1,LIVE)
+//    ch=sumbu atas, cl=sumbu bawah, oc=neto, lh=julat (semua pts)
+void BuildGenesisMatrix()
 {
-   if(strength <= 0) { sig = "NETRAL"; clr = clrSilver; sc = 0; return; }
-   if(dir == "BUY")
+   for(int s=0; s<4; s++)
    {
-      sig = (strength == 3) ? "BUY KUAT" : (strength == 2) ? "BUY MODERAT" : "BUY LEMAH";
-      clr = (strength == 3) ? clrLime : (strength == 2) ? clrGold : clrPaleGreen;
+      double open  = iOpen (_Symbol, PERIOD_CURRENT, s);
+      double close = iClose(_Symbol, PERIOD_CURRENT, s);
+      double high  = iHigh (_Symbol, PERIOD_CURRENT, s);
+      double low   = iLow  (_Symbol, PERIOD_CURRENT, s);
+      if(open <= 0) { g_ch[s]=0; g_cl[s]=0; g_oc[s]=0; g_lh[s]=0; continue; }
+      g_ch[s] = (int)((high - MathMax(open, close)) / myPoint);
+      g_cl[s] = (int)((MathMin(open, close) - low) / myPoint);
+      g_oc[s] = (int)((close - open) / myPoint);
+      g_lh[s] = (int)((high - low) / myPoint);
    }
-   else
+}
+
+//--- [v1.12b] HITUNG SKOR SINYAL GENESIS dari 16 angka faktual
+//    Kontribusi: Neto (konsistensi 4 bar), Tekanan Atas/Bawah,
+//                Julat (pembobot ekspansi), GT Konfirm (timeframe besar)
+void ComputeGenesisSignal()
+{
+   // 1) Neto: konsistensi arah 4 bar
+   int netSum = 0;
+   for(int s=0; s<4; s++)
    {
-      sig = (strength == 3) ? "SELL KUAT" : (strength == 2) ? "SELL MODERAT" : "SELL LEMAH";
-      clr = (strength == 3) ? clrRed : (strength == 2) ? clrOrange : clrSalmon;
+      if(g_oc[s] > 0)      netSum++;
+      else if(g_oc[s] < 0) netSum--;
    }
-   sc = (dir == "BUY") ? strength : -strength;
+
+   // 2) Tekanan Atas vs Bawah (total sumbu)
+   int sumCh = g_ch[0]+g_ch[1]+g_ch[2]+g_ch[3];
+   int sumCl = g_cl[0]+g_cl[1]+g_cl[2]+g_cl[3];
+   int press = sumCl - sumCh;   // >0 = dukungan bawahan (buying)
+
+   // 3) Julat: rata-rata; live ekspansi = pembobot arah
+   double avgLh = (g_lh[0]+g_lh[1]+g_lh[2]+g_lh[3]) / 4.0;
+   bool   expand = (avgLh > 0 && g_lh[0] >= avgLh);
+
+   int score = 0;
+   if(netSum >= 2)      score += 3;
+   else if(netSum == 1) score += 1;
+   else if(netSum <= -2)score -= 3;
+   else if(netSum == -1)score -= 1;
+
+   if(press > 0)        score += 2;
+   else if(press < 0)   score -= 2;
+
+   if(expand && score != 0) { if(score > 0) score += 1; else score -= 1; }
+
+   // 4) GT Konfirm (timeframe besar, bar tertutup)
+   double gtO = iOpen (_Symbol, InpGTTimeframe, 1);
+   double gtC = iClose(_Symbol, InpGTTimeframe, 1);
+   if(gtO > 0 && gtC > gtO)       score += 1;
+   else if(gtO > 0 && gtC < gtO)  score -= 1;
+
+   g_genScore = score;
+   if(score >= InpRecoBuyLevel)        { g_genDir=1;  g_genLabel="BUY KUAT";     g_genColor=clrLime; }
+   else if(score >= 3)                 { g_genDir=1;  g_genLabel="BUY MODERAT";  g_genColor=clrGold; }
+   else if(score >= 1)                 { g_genDir=1;  g_genLabel="BUY LEMAH";    g_genColor=clrPaleGreen; }
+   else if(score <= InpRecoSellLevel)  { g_genDir=-1; g_genLabel="SELL KUAT";    g_genColor=clrRed; }
+   else if(score <= -3)                { g_genDir=-1; g_genLabel="SELL MODERAT"; g_genColor=clrOrange; }
+   else if(score <= -1)                { g_genDir=-1; g_genLabel="SELL LEMAH";   g_genColor=clrSalmon; }
+   else                                { g_genDir=0;  g_genLabel="NETRAL";      g_genColor=clrSilver; }
+
+   // Dukungan metrik (berapa dari Neto/Tekanan/Julat/GT setuju arah)
+   g_genSupport = 0;
+   if((netSum > 0 && g_genDir > 0) || (netSum < 0 && g_genDir < 0) || netSum == 0) g_genSupport++;
+   if((press  > 0 && g_genDir > 0) || (press  < 0 && g_genDir < 0))                g_genSupport++;
+   if(g_genDir != 0 && expand)                                                     g_genSupport++;
+   if((gtC > gtO && g_genDir > 0) || (gtC < gtO && g_genDir < 0))                  g_genSupport++;
+   g_genTotal = 4;
 }
 
-//--- Sinyal Tinggi: breakout resistance
-void SigTinggi(double high, double prevHigh, double open, double close, string &sig, color &clr, int &sc)
+//--- [v1.12b] DETEKSI STRATEGI EA YG MENDEKATI KONDISI SAAT INI
+//    Breakout & Zigzag memakai level dari bar TERTUTUP (GT3,GT2,GT1)
+void ComputeStrategyHint()
 {
-   if(high > prevHigh)      SetSignal("BUY", 3, sig, clr, sc);
-   else if(close > open)    SetSignal("BUY", 1, sig, clr, sc);
-   else                     SetSignal("", 0, sig, clr, sc);
-}
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double g3h = iHigh(_Symbol, PERIOD_CURRENT, 3), g3l = iLow(_Symbol, PERIOD_CURRENT, 3);
+   double g2h = iHigh(_Symbol, PERIOD_CURRENT, 2), g2l = iLow(_Symbol, PERIOD_CURRENT, 2);
+   double g1h = iHigh(_Symbol, PERIOD_CURRENT, 1), g1l = iLow(_Symbol, PERIOD_CURRENT, 1);
 
-//--- Sinyal Atas: tutup dekat puncak (jejak atas)
-void SigAtas(double open, double close, double high, string &sig, color &clr, int &sc)
-{
-   double body   = MathAbs(close - open);
-   double upWick = high - MathMax(open, close);
-   if(close > open)
-      SetSignal("BUY", (upWick <= body * InpWickMaxRatio) ? 3 : 2, sig, clr, sc);
-   else if(close < open)
-      SetSignal("SELL", 1, sig, clr, sc);
-   else
-      SetSignal("", 0, sig, clr, sc);
-}
+   // Breakout: harga menembus level tertinggi/terendah bar tertutup terdekat
+   double refHigh = MathMax(MathMax(g3h,g2h),g1h);
+   double refLow  = MathMin(MathMin(g3l,g2l),g1l);
+   bool boBuy  = (refHigh > 0 && price > refHigh);
+   bool boSell = (refLow  > 0 && price < refLow);
 
-//--- Sinyal Bawah: tutup dekat dasar (jejak bawah)
-void SigBawah(double open, double close, double low, string &sig, color &clr, int &sc)
-{
-   double body   = MathAbs(close - open);
-   double dnWick = MathMin(open, close) - low;
-   if(close < open)
-      SetSignal("SELL", (dnWick <= body * InpWickMaxRatio) ? 3 : 2, sig, clr, sc);
-   else if(close > open)
-      SetSignal("BUY", 1, sig, clr, sc);
-   else
-      SetSignal("", 0, sig, clr, sc);
-}
+   // Zigzag: harga dekat batas level tertutup + tanda reversal kecil
+   bool zgBuy  = (g1l > 0 && (price - g1l) <= InpZigzagBouncePts * myPoint && g_oc[0] >= -3);
+   bool zgSell = (g1h > 0 && (g1h - price) <= InpZigzagBouncePts * myPoint && g_oc[0] <= 3);
 
-//--- Sinyal Rendah: breakdown support
-void SigRendah(double low, double prevLow, double open, double close, string &sig, color &clr, int &sc)
-{
-   if(low < prevLow)        SetSignal("SELL", 3, sig, clr, sc);
-   else if(close < open)    SetSignal("SELL", 1, sig, clr, sc);
-   else                     SetSignal("", 0, sig, clr, sc);
-}
+   // Sinyal faktual mendekati ambang
+   bool sig    = (MathAbs(g_genScore) >= 3);
 
-//--- Sinyal Awal: gap / posisi pembukaan
-void SigAwal(double open, double prevOpen, double prevClose, string &sig, color &clr, int &sc)
-{
-   if(open > prevClose)        SetSignal("BUY", 3, sig, clr, sc);
-   else if(open < prevClose)   SetSignal("SELL", 3, sig, clr, sc);
-   else if(open > prevOpen)    SetSignal("BUY", 1, sig, clr, sc);
-   else if(open < prevOpen)    SetSignal("SELL", 1, sig, clr, sc);
-   else                        SetSignal("", 0, sig, clr, sc);
-}
-
-//--- Sinyal Neto: kekuatan momentum tubuh candle
-void SigNeto(int neto, int julat, string &sig, color &clr, int &sc)
-{
-   double ratio = (julat > 0) ? MathAbs(neto) / (double)julat : 0;
-   int st = (ratio >= InpBodyKuatRatio) ? 3 : (ratio >= InpBodyModeratRatio) ? 2 : 1;
-   if(neto > 0)      SetSignal("BUY",  st, sig, clr, sc);
-   else if(neto < 0) SetSignal("SELL", st, sig, clr, sc);
-   else              SetSignal("", 0, sig, clr, sc);
-}
-
-//--- Sinyal Inti: posisi penutupan dalam rentang bar
-void SigInti(double high, double low, double close, string &sig, color &clr, int &sc)
-{
-   double range = high - low;
-   if(range <= 0) { SetSignal("", 0, sig, clr, sc); return; }
-   double pos = (close - low) / range;
-   if(pos >= InpCloseKuatRatio)         SetSignal("BUY", 3, sig, clr, sc);
-   else if(pos >= InpCloseModeratRatio) SetSignal("BUY", 2, sig, clr, sc);
-   else if(pos >= 0.45)                 SetSignal("", 0, sig, clr, sc);
-   else if(pos >= InpCloseSellModerat)  SetSignal("SELL", 2, sig, clr, sc);
-   else                                 SetSignal("SELL", 3, sig, clr, sc);
-}
-
-//--- Sinyal Julat: volatilitas relatif vs rata-rata N bar
-void SigJulat(int neto, int julat, double avgJulat, double point, string &sig, color &clr, int &sc)
-{
-   double ratio = (avgJulat > 0) ? (julat * point) / avgJulat : 1.0;
-   string dir   = (neto > 0) ? "BUY" : (neto < 0) ? "SELL" : "";
-   if(ratio >= InpJulatKuatRatio)          SetSignal(dir, 3, sig, clr, sc);
-   else if(ratio <= InpJulatKompresiRatio) SetSignal(dir, 2, sig, clr, sc);
-   else                                    SetSignal(dir, 1, sig, clr, sc);
+   string dir = "";
+   g_stratDesc = "NETRAL";
+   if(boBuy)          { g_stratDesc = "BREAKOUT"; dir=" (BUY)"; }
+   else if(boSell)    { g_stratDesc = "BREAKOUT"; dir=" (SELL)"; }
+   else if(zgBuy)     { g_stratDesc = "ZIGZAG";   dir=" (BUY)"; }
+   else if(zgSell)    { g_stratDesc = "ZIGZAG";   dir=" (SELL)"; }
+   else if(sig)       { g_stratDesc = "SINYAL GT"; dir = (g_genDir>0 ? " (BUY)" : g_genDir<0 ? " (SELL)" : ""); }
+   else                    g_stratDesc = "A* / LAYER / NETRAL";
+   g_stratDesc += dir;
 }
 
 void UpdateGenesisPanel()
 {
-   double open0  = iOpen(_Symbol, PERIOD_CURRENT, 0);
-   double close0 = iClose(_Symbol, PERIOD_CURRENT, 0);
-   double high0  = iHigh(_Symbol, PERIOD_CURRENT, 0);
-   double low0   = iLow(_Symbol, PERIOD_CURRENT, 0);
-   if(open0 == 0) return;
+   BuildGenesisMatrix();
+   ComputeGenesisSignal();
+   ComputeStrategyHint();
 
-   double open1  = iOpen(_Symbol, PERIOD_CURRENT, 1);
-   double close1 = iClose(_Symbol, PERIOD_CURRENT, 1);
-   double high1  = iHigh(_Symbol, PERIOD_CURRENT, 1);
-   double low1   = iLow(_Symbol, PERIOD_CURRENT, 1);
-
-   // Rata-rata julat N bar terakhir (volatilitas)
-   double avgJulat = 0;
-   int cnt = 0;
-   for(int i = 1; i <= InpJulatAvgBars; i++)
+   // Isi matriks 4 metrik x 4 bar (berwarna sesuai arah)
+   // Kolom c (kiri->kanan): label GT3, GT2, GT1, LIVE
+   // Data di array: [0]=LIVE, [1]=GT1, [2]=GT2, [3]=GT3  -> ambil indeks (3-c)
+   for(int c=0; c<4; c++)
    {
-      double h = iHigh(_Symbol, PERIOD_CURRENT, i);
-      double l = iLow(_Symbol, PERIOD_CURRENT, i);
-      if(h > 0 && l > 0) { avgJulat += (h - l); cnt++; }
+      int id = 3 - c;   // koreksi urutan: kolom GT3(paling kiri)=indeks 3, LIVE(paling kanan)=indeks 0
+      color cAtas  = (g_ch[id] > g_cl[id]) ? gClrDanger : gClrValue;   // dominan atas = tekanan jual
+      color cBawah = (g_cl[id] > g_ch[id]) ? gClrSuccess: gClrValue;   // dominan bawah = dukungan beli
+      color cNeto  = (g_oc[id] > 0) ? gClrSuccess : (g_oc[id] < 0 ? gClrDanger : gClrValue);
+      color cJulat = (g_lh[id] > 0) ? gClrValue : clrSilver;
+
+      SetVal(PREFIX + "Gs_CH_"+IntegerToString(c), IntegerToString(g_ch[id]), cAtas);
+      SetVal(PREFIX + "Gs_CL_"+IntegerToString(c), IntegerToString(g_cl[id]), cBawah);
+      SetVal(PREFIX + "Gs_OC_"+IntegerToString(c), (g_oc[id]>=0?"+":"")+IntegerToString(g_oc[id]), cNeto);
+      SetVal(PREFIX + "Gs_LH_"+IntegerToString(c), IntegerToString(g_lh[id]), cJulat);
+
+      int agg = g_ch[id] + g_cl[id] + g_oc[id] + g_lh[id];
+      SetVal(PREFIX + "Gs_Agg_"+IntegerToString(c), IntegerToString(agg), gClrAccent);
    }
-   if(cnt > 0) avgJulat /= cnt;
-   if(avgJulat <= 0) avgJulat = myPoint;
 
-   double bH = MathMax(open0, close0);   // Atas (jejak atas)
-   double bL = MathMin(open0, close0);   // Bawah (jejak bawah)
-   int neto  = (int)((close0 - open0) / myPoint);   // Selisih awal-inti
-   int julat = (int)((high0 - low0) / myPoint);     // Rentang tinggi-rendah
+   // Baris SINYAL (hasil skor faktual + dukungan metrik)
+   string supportStr = StringFormat("%d/%d", g_genSupport, g_genTotal);
+   SetVal(PREFIX + "Gs_SigV",  g_genLabel + " (skor " + IntegerToString(g_genScore) + ")", g_genColor);
+   SetVal(PREFIX + "Gs_SigPct", "STRATEGI EA: " + g_stratDesc, g_genColor);
 
-   int total = 0;
-   string sig; color clr; int sc;
+   // Progress bar (batang visual ke ambang)
+   int filled = (int)(MathMin(14, MathAbs(g_genScore)) / 2.0);
+   string bar = "";
+   for(int b=0; b<filled; b++) bar += "█";
+   for(int b=filled; b<14; b++) bar += "░";
+   SetVal(PREFIX + "Gs_SigBar", bar, g_genColor);
 
-   // Kolom 1: Tinggi | Atas | Bawah | Rendah
-   SigTinggi(high0, high1, open0, close0, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_T1D", sig, clr);
-   SetVal(PREFIX + "Gs_T1V", DoubleToString(high0, myDigits), gClrValue);
-
-   SigAtas(open0, close0, high0, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_T2D", sig, clr);
-   SetVal(PREFIX + "Gs_T2V", DoubleToString(bH, myDigits), gClrValue);
-
-   SigBawah(open0, close0, low0, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_T3D", sig, clr);
-   SetVal(PREFIX + "Gs_T3V", DoubleToString(bL, myDigits), gClrValue);
-
-   SigRendah(low0, low1, open0, close0, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_T4D", sig, clr);
-   SetVal(PREFIX + "Gs_T4V", DoubleToString(low0, myDigits), gClrValue);
-
-   // Kolom 2: Awal | Neto | Inti | Julat
-   SigAwal(open0, open1, close1, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_U1D", sig, clr);
-   SetVal(PREFIX + "Gs_U1V", DoubleToString(open0, myDigits), gClrValue);
-
-   SigNeto(neto, julat, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_U2D", sig, clr);
-   SetVal(PREFIX + "Gs_U2V", (neto >= 0 ? "+" : "") + IntegerToString(neto) + " pts", clr);
-
-   SigInti(high0, low0, close0, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_U3D", sig, clr);
-   SetVal(PREFIX + "Gs_U3V", DoubleToString(close0, myDigits), gClrValue);
-
-   SigJulat(neto, julat, avgJulat, myPoint, sig, clr, sc); total += sc;
-   SetVal(PREFIX + "Gs_U4D", sig, clr);
-   SetVal(PREFIX + "Gs_U4V", IntegerToString(julat) + " pts", gClrValue);
-
-   // Konfirmasi arah timeframe GT besar (bar tertutup)
-   double gtOpen  = iOpen(_Symbol, InpGTTimeframe, 1);
-   double gtClose = iClose(_Symbol, InpGTTimeframe, 1);
-   string gtSig = "NETRAL"; color gtClr = clrSilver; int gtSc = 0;
-   if(gtOpen > 0 && gtClose > 0)
-   {
-      if(gtClose > gtOpen)      { gtSig = "BUY";  gtClr = clrLime;   gtSc = 1; }
-      else if(gtClose < gtOpen) { gtSig = "SELL"; gtClr = clrRed; gtSc = -1; }
-   }
-   total += gtSc;
-   SetVal(PREFIX + "Gs_GTD", gtSig, gtClr);
-   SetVal(PREFIX + "Gs_GTV", (gtSc >= 0 ? "+" : "") + IntegerToString(gtSc), gtClr);
-
-   // Sinyal agregat (8 sinyal + konfirmasi GT)
-   string rec; color recClr;
-   if(total >= InpRecoBuyLevel)        { rec = "BUY KUAT";     recClr = clrLime; }
-   else if(total >= 3)                 { rec = "BUY MODERAT";  recClr = clrGold; }
-   else if(total >= 1)                 { rec = "BUY LEMAH";    recClr = clrPaleGreen; }
-   else if(total <= InpRecoSellLevel)  { rec = "SELL KUAT";    recClr = clrRed; }
-   else if(total <= -3)                { rec = "SELL MODERAT"; recClr = clrOrange; }
-   else if(total <= -1)                { rec = "SELL LEMAH";   recClr = clrSalmon; }
-   else                                { rec = "NETRAL";       recClr = clrSilver; }
-   SetVal(PREFIX + "Gs_RecD", rec + " (" + IntegerToString(total) + ")", recClr);
+   // Baris STRATEGI EA (keterangan strategi yg mendekati)
+   
 }
 
 void CreateAboutTab(int y)
@@ -1565,11 +1565,22 @@ double NormalizeLot(double lot)
 }
 
 // [v1.11] Lot dibatasi oleh InpMaxLotCap
-double CalcNextLot()
+double CalcNextLot(ENUM_STRATEGY strat)
 {
-   double nextLot = InpLot;
-   if(g_martingaleStep > 0)
-      nextLot = InpLot * MathPow(InpMultiplier, g_martingaleStep);
+   double base  = InpLot;
+   double mult  = InpMultiplier;
+   int    step  = g_martingaleStep;
+   switch(strat)
+   {
+      case STRAT_BREAKOUT: base=InpLotBreakout; mult=InpMultBreakout; step=g_stepBreakout; break;
+      case STRAT_LAYER:    base=InpLotLayer;    mult=InpMultLayer;    step=g_stepLayer;    break;
+      case STRAT_ZIGZAG:   base=InpLotZigzag;   mult=InpMultZigzag;   step=g_stepZigzag;   break;
+      case STRAT_SIGNAL:   base=InpLotSignal;   mult=InpMultSignal;   step=g_stepSignal;   break;
+      case STRAT_ASTAR:    base=InpLotAStar;    mult=InpMultAStar;    step=g_stepAStar;    break;
+   }
+   double nextLot = base;
+
+   if(step > 0) nextLot = base * MathPow(mult, step);
    nextLot = NormalizeLot(nextLot);
    if(nextLot > InpMaxLotCap) nextLot = NormalizeLot(InpMaxLotCap);
    return nextLot;
@@ -1585,7 +1596,22 @@ int GetGT_RangePoints(int shift = 1)
 
 //--- Hitung SL/TP dari level GT atau fallback points
 // [v1.11] + validasi jarak minimal SL/TP sesuai aturan broker
-void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
+// [v1.12b] Ambil TP/SL dalam poin sesuai strategi (bisa diisi di kolom input)
+void GetStrategyTP_SL(ENUM_STRATEGY strat, int &tpPts, int &slPts)
+{
+   tpPts = InpTP; slPts = InpSL;   // default global
+   switch(strat)
+   {
+      case STRAT_BREAKOUT: tpPts=InpTPBreakout; slPts=InpSLBreakout; break;
+      case STRAT_LAYER:    tpPts=InpTPLayer;    slPts=InpSLLayer;    break;
+      case STRAT_ZIGZAG:   tpPts=InpTPZigzag;   slPts=InpSLZigzag;   break;
+      case STRAT_SIGNAL:   tpPts=InpTPSignal;   slPts=InpSLSignal;   break;
+      case STRAT_ASTAR:    tpPts=InpTPAStar;    slPts=InpSLAStar;    break;
+   }
+}
+
+// [v1.12b] Hitung SL/TP per strategi (pts) atau dari level GT (kerangka)
+void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp, ENUM_STRATEGY strat)
 {
    double prevHigh = iHigh(_Symbol, InpGTTimeframe, 1);
    double prevLow  = iLow (_Symbol, InpGTTimeframe, 1);
@@ -1593,6 +1619,8 @@ void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
    double liveLow  = iLow (_Symbol, PERIOD_CURRENT, 0);
    int    rangePts = GetGT_RangePoints(1);
    if(rangePts <= 0) rangePts = InpTP;
+   int tpPts = InpTP, slPts = InpSL;
+   GetStrategyTP_SL(strat, tpPts, slPts);
 
    if(InpUseGTSLTP && prevHigh > 0 && prevLow > 0)
    {
@@ -1611,13 +1639,13 @@ void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
    {
       if(type == POSITION_TYPE_BUY)
       {
-         sl = NormalizeDouble(entry - InpSL * myPoint, myDigits);
-         tp = NormalizeDouble(entry + InpTP * myPoint, myDigits);
+         sl = NormalizeDouble(entry - slPts * myPoint, myDigits);
+         tp = NormalizeDouble(entry + tpPts * myPoint, myDigits);
       }
       else
       {
-         sl = NormalizeDouble(entry + InpSL * myPoint, myDigits);
-         tp = NormalizeDouble(entry - InpTP * myPoint, myDigits);
+         sl = NormalizeDouble(entry + slPts * myPoint, myDigits);
+         tp = NormalizeDouble(entry - tpPts * myPoint, myDigits);
       }
    }
 
@@ -1642,13 +1670,13 @@ void CalcGTSLTP(ENUM_POSITION_TYPE type, double entry, double &sl, double &tp)
 }
 
 // [v1.11] Cek margin cukup + validasi sebelum kirim order
-bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment)
+bool OpenPosition(ENUM_POSITION_TYPE type, double lot, string comment, ENUM_STRATEGY strat)
 {
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double price = (type == POSITION_TYPE_BUY) ? ask : bid;
    double sl = 0, tp = 0;
-   CalcGTSLTP(type, price, sl, tp);
+   CalcGTSLTP(type, price, sl, tp, strat);
 
    // Cek margin cukup sebelum entry
    double marginNeed = 0;
@@ -1849,7 +1877,7 @@ void LogicBreakout()
 
    ENUM_POSITION_TYPE sig;
    if(CheckBreakout(sig))
-      OpenPosition(sig, CalcNextLot(), "GT Trobosan " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+      OpenPosition(sig, CalcNextLot(STRAT_BREAKOUT), "GT Trobosan " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"), STRAT_BREAKOUT);
 }
 
 //==================== STRATEGY 2: LAYER / GRID ====================
@@ -1858,7 +1886,7 @@ void LogicLayer()
    g_activeStrategy = "LAYER";
    if(!IsTradingAllowed()) return;
    int posCount = CountMyPositions();
-   if(posCount >= InpMaxSteps) return;
+   if(posCount >= InpStepsLayer) return;
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1901,9 +1929,9 @@ void LogicLayer()
       if(distPts < InpLayerStepPts) return; // belum cukup jauh untuk layer baru
    }
 
-   double lot = NormalizeLot(InpLot * MathPow(InpMultiplier, posCount));
+   double lot = NormalizeLot(MathMin(InpLotLayer * MathPow(InpMultLayer, posCount), InpMaxLotCap));
    if(lot > InpMaxLotCap) lot = NormalizeLot(InpMaxLotCap); // [v1.11] batas lot
-   OpenPosition(prefer, lot, StringFormat("GT Layer #%d", posCount + 1));
+   OpenPosition(prefer, lot, StringFormat("GT Layer #%d", posCount + 1), STRAT_LAYER);
 }
 
 //==================== STRATEGY 3: ZIGZAG BOUNCING ====================
@@ -1946,7 +1974,7 @@ void LogicZigzag()
       if(dir < 0 && sig != POSITION_TYPE_SELL) return;
    }
 
-   OpenPosition(sig, CalcNextLot(), "GT Zigzag " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+   OpenPosition(sig, CalcNextLot(STRAT_ZIGZAG), "GT Zigzag " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"), STRAT_ZIGZAG);
 }
 
 //==================== STRATEGY 4: SINYAL GT A-E ====================
@@ -1964,7 +1992,7 @@ void LogicSignal()
    if(dir == 0 || sc < 6) return; // minimal skor 6
 
    ENUM_POSITION_TYPE sig = (dir > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-   OpenPosition(sig, CalcNextLot(), "GT Sinyal " + lb);
+   OpenPosition(sig, CalcNextLot(STRAT_SIGNAL), "GT Sinyal " + lb, STRAT_SIGNAL);
 }
 
 //==================== STRATEGY 5: A* PATHFINDING (v1.12) ====================
@@ -2194,21 +2222,63 @@ void LogicAStar()
          g_lastSignalType = "A*_BUY";
          g_astarDirection = "BUY";
          g_lastSignalScore = 8;
-         OpenPosition(POSITION_TYPE_BUY, CalcNextLot(), "GT A* Path BUY");
+         OpenPosition(POSITION_TYPE_BUY, CalcNextLot(STRAT_ASTAR), "GT A* Path BUY", STRAT_ASTAR);
       }
       else if(endPrice < bid - 10 * myPoint)
       {
          g_lastSignalType = "A*_SELL";
          g_astarDirection = "SELL";
          g_lastSignalScore = 8;
-         OpenPosition(POSITION_TYPE_SELL, CalcNextLot(), "GT A* Path SELL");
+         OpenPosition(POSITION_TYPE_SELL, CalcNextLot(STRAT_ASTAR), "GT A* Path SELL", STRAT_ASTAR);
       }
    }
 }
 
 //--- Dispatcher utama
+// [v1.12b] Entry otomatis: buka posisi utk satu strategi sesuai arah sinyal
+void AutoEntry(ENUM_STRATEGY strat, int dir, string label)
+{
+   if(!IsTradingAllowed()) return;                 // cek pengaman (spread, dd, cooldown, dll)
+   if(CountMyPositions() > 0) return;              // hanya 1 posisi terbuka utk EA
+   if(dir == 0) return;                            // sinyal netral, tidak masuk
+
+   ENUM_POSITION_TYPE sig = (dir > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   g_activeStrategy = label;
+   g_lastSignalType = label + (dir > 0 ? "_BUY" : "_SELL");
+   g_lastSignalScore = g_genScore;
+   // Kurangi lot tiap step utk strategi tsb via CalcNextLot(strat)
+   OpenPosition(sig, CalcNextLot(strat), label + " " + (sig == POSITION_TYPE_BUY ? "BUY" : "SELL"), strat);
+}
+
+// [v1.12b] Pilih strategi otomatis berdasar kekuatan sinyal GT Genesis
+//   KUAT    -> Breakout (kejar tren), arah searah sinyal
+//   MODERAT -> Zigzag (bounce), arah searah sinyal
+//   LEMAH   -> Layer / inversi GT (masuk berlawanan, menunggu pembalikan)
+void ExecuteAutoGenesis()
+{
+   BuildGenesisMatrix();      // hitung 16 angka faktual (GT3,GT2,GT1,LIVE)
+   ComputeGenesisSignal();    // hitung skor & arah sinyal
+   int sc = g_genScore;
+   int abs = (sc < 0) ? -sc : sc;
+   int dir = (sc > 0) ? 1 : (sc < 0) ? -1 : 0;
+   if(dir == 0) return;
+
+   if(abs >= InpRecoBuyLevel)                         // KUAT
+      AutoEntry(STRAT_BREAKOUT, dir, "GT Auto Breakout");
+   else if(abs >= 3)                                  // MODERAT
+      AutoEntry(STRAT_ZIGZAG, dir, "GT Auto Zigzag");
+   else if(abs >= 1)                                  // LEMAH
+      AutoEntry(STRAT_LAYER, -dir, "GT Auto Layer (Inversi)");
+}
+
 void ExecuteTradingLogic()
 {
+   if(InpAutoGenesis)
+   {
+      ExecuteAutoGenesis();   // mode otomatis: pilih strategi dr kekuatan sinyal
+      return;
+   }
+
    switch(InpStrategy)
    {
       case STRAT_LAYER:    LogicLayer();    break;
@@ -2237,6 +2307,65 @@ void CloseMyPositions()
 
 //--- OnTradeTransaction: martingale step
 // [v1.11] Di max step → berhenti (bukan reset) jika InpStopOnMaxStep=true
+// [v1.12b] Helper martingale per strategi (identifikasi via comment order)
+ENUM_STRATEGY StrategyFromComment(string cmt)
+{
+   if(StringFind(cmt, "Trobosan") >= 0) return STRAT_BREAKOUT;
+   if(StringFind(cmt, "Layer")    >= 0) return STRAT_LAYER;
+   if(StringFind(cmt, "Zigzag")   >= 0) return STRAT_ZIGZAG;
+   if(StringFind(cmt, "Sinyal")   >= 0) return STRAT_SIGNAL;
+   if(StringFind(cmt, "A*")       >= 0) return STRAT_ASTAR;
+   return (ENUM_STRATEGY)-1;
+}
+int    GetStep(ENUM_STRATEGY st)
+{
+   switch(st)
+   {
+      case STRAT_BREAKOUT: return g_stepBreakout;
+      case STRAT_LAYER:    return g_stepLayer;
+      case STRAT_ZIGZAG:   return g_stepZigzag;
+      case STRAT_SIGNAL:   return g_stepSignal;
+      case STRAT_ASTAR:    return g_stepAStar;
+      default:             return g_martingaleStep;
+   }
+}
+void   ResetStep(ENUM_STRATEGY st)
+{
+   switch(st)
+   {
+      case STRAT_BREAKOUT: g_stepBreakout=0; break;
+      case STRAT_LAYER:    g_stepLayer=0;    break;
+      case STRAT_ZIGZAG:   g_stepZigzag=0;   break;
+      case STRAT_SIGNAL:   g_stepSignal=0;   break;
+      case STRAT_ASTAR:    g_stepAStar=0;    break;
+      default:             g_martingaleStep=0; break;
+   }
+}
+void   IncStep(ENUM_STRATEGY st)
+{
+   switch(st)
+   {
+      case STRAT_BREAKOUT: g_stepBreakout++; break;
+      case STRAT_LAYER:    g_stepLayer++;    break;
+      case STRAT_ZIGZAG:   g_stepZigzag++;   break;
+      case STRAT_SIGNAL:   g_stepSignal++;   break;
+      case STRAT_ASTAR:    g_stepAStar++;    break;
+      default:             IncStep(st); break;
+   }
+}
+int    StrategyMaxSteps(ENUM_STRATEGY st)
+{
+   switch(st)
+   {
+      case STRAT_BREAKOUT: return InpStepsBreakout;
+      case STRAT_LAYER:    return InpStepsLayer;
+      case STRAT_ZIGZAG:   return InpStepsZigzag;
+      case STRAT_SIGNAL:   return InpStepsSignal;
+      case STRAT_ASTAR:    return InpStepsAStar;
+      default:             return InpMaxSteps;
+   }
+}
+
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest     &request,
                         const MqlTradeResult      &result)
@@ -2254,29 +2383,32 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                    HistoryDealGetDouble(dealTicket, DEAL_SWAP) +
                    HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
 
+   string cmt = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+   ENUM_STRATEGY st = StrategyFromComment(cmt);
+
    if(profit > 0)
    {
-      g_martingaleStep = 0;
+      ResetStep(st);
       Print("GT: Profit. Martingale/Layer reset ke 0.");
    }
    else if(profit < 0)
    {
-      if(InpStopOnMaxStep && g_martingaleStep >= InpMaxSteps)
+      if(InpStopOnMaxStep && GetStep(st) >= StrategyMaxSteps(st))
          return; // sudah di max step — tunggu profit, jangan tambah lagi
 
-      g_martingaleStep++;
-      if(g_martingaleStep >= InpMaxSteps)
+      IncStep(st);
+      if(GetStep(st) >= StrategyMaxSteps(st))
       {
          if(InpStopOnMaxStep)
-            Print("GT: Max step tercapai (", InpMaxSteps, "). Entry dihentikan sampai profit.");
+            Print("GT: Max step tercapai (", StrategyMaxSteps(st), "). Entry dihentikan sampai profit.");
          else
          {
-            g_martingaleStep = 0;
-            Print("GT: Max step tercapai (", InpMaxSteps, "). Reset.");
+            ResetStep(st);
+            Print("GT: Max step tercapai (", StrategyMaxSteps(st), "). Reset.");
          }
       }
       else
-         Print("GT: Loss. Step naik ke ", g_martingaleStep);
+         Print("GT: Loss. Step naik ke ", GetStep(st));
    }
 }
 //+------------------------------------------------------------------+
