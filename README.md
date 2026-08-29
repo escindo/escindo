@@ -33,7 +33,7 @@ Hai! 👋 Para penunggu GT https://sagu.pages.dev/gt
 
 ## Apa Itu Grafik Tabranij?
 
-**Grafik Tabranij** adalah sebuah kerangka analisis visual yang menyajikan **riwayat dan dinamika pergerakan harga** secara lengkap dan terstruktur.
+**Grafik Tabranij** adalah grafik sebuah kerangka analisis visual yang menyajikan **riwayat dan dinamika pergerakan harga** secara lengkap dan terstruktur.
 
 Ia menggabungkan delapan elemen utama harga (High, Low, Open, Range, Upper/Lower Bound, Net Movement, dll) ke dalam satu representasi yang mudah dibaca, sehingga pemburu dan pengepul saldo di MT5 dan TradingView dapat dengan cepat memahami:
 
