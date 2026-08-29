@@ -1,7 +1,6 @@
 # Grafik Tabranij
 
-**G**enesis · **r**iwayat · **a**ngka · **f**aktual · **i**nformasi · **k**euangan
-**T**inggi · **a**tas · **b**awah · **r**endah · **a**wal · **n**eto · **i**nti · **j**ulat
+## **G**enesis · **r**iwayat · **a**ngka · **f**aktual · **i**nformasi · **k**euangan · **T**inggi · **a**tas · **b**awah · **r**endah · **a**wal · **n**eto · **i**nti · **j**ulat
 
 Hai! 👋 Para penunggu GT https://sagu.pages.dev/gt
 
