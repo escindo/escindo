@@ -2,7 +2,7 @@
 
 **Representasi Visual Dinamis untuk Analisis Pergerakan Harga**
 
-Hai! 👋 Para Pemburu dan pengepul saldo dolar dimana kalian berada
+Hai! 👋 Para penunggu GT https://sagu.pages.dev/gt
 
 **Apakah Anda tahu kepanjangan dari "GRAFIK TABRANIJ"?**
 
